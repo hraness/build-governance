@@ -1,0 +1,24 @@
+{
+  "contract": "hraness.portfolio-inventory/v1",
+  "formatVersion": 1,
+  "repository": "hraness/build-governance",
+  "components": [
+    {
+      "kind": "package",
+      "name": "@hraness/build-governance",
+      "path": ".",
+      "visibility": "public",
+      "version": "0.1.0"
+    }
+  ],
+  "dependencies": [],
+  "deployments": [],
+  "brands": [],
+  "publications": [
+    {
+      "component": "@hraness/build-governance",
+      "packageName": "@hraness/build-governance",
+      "repository": "hraness/build-governance"
+    }
+  ]
+}
