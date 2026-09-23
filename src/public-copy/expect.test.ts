@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import fc from "fast-check";
 import {
   CopyAssertionError,
@@ -19,6 +21,17 @@ describe("expectInstallPinsMatch", () => {
     expect(() => expectInstallPinsMatch("bun add -d github:hraness/build-governance#v0.1.0", pkg)).toThrow(CopyAssertionError);
     expect(() => expectInstallPinsMatch("No install line.", pkg)).toThrow("found none");
     expect(() => expectInstallPinsMatch("No install line.", pkg, { require: false })).not.toThrow();
+  });
+
+  test("accepts package.json as parsed, with its repository object", () => {
+    const repoRoot = join(import.meta.dir, "..", "..");
+    const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { name: string; version: string };
+    const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
+    expect(() => expectInstallPinsMatch(readme, packageJson)).not.toThrow();
+
+    const typed = { name: "@example/tool", version: "2.0.0", repository: { type: "git", url: "git+https://github.com/example/tool.git" } };
+    expect(() => expectInstallPinsMatch("bun add -d github:example/tool#v2.0.0", typed)).not.toThrow();
+    expect(() => expectInstallPinsMatch("bun add -d github:example/tool#v1.0.0", typed)).toThrow(CopyAssertionError);
   });
 });
 

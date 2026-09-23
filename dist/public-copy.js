@@ -823,9 +823,10 @@ function escapeRegExp2(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function repositoryFor(pkg) {
-  if (pkg.repository) {
-    const match = /github\.com[/:]([^/]+\/[^/#]+?)(?:\.git)?(?:#.*)?$/.exec(pkg.repository);
-    return match?.[1] ?? pkg.repository.replace(/\.git$/, "");
+  const raw = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
+  if (raw) {
+    const match = /github\.com[/:]([^/]+\/[^/#]+?)(?:\.git)?(?:#.*)?$/.exec(raw);
+    return match?.[1] ?? raw.replace(/\.git$/, "");
   }
   const scoped = /^@hraness\/(.+)$/.exec(pkg.name);
   return scoped?.[1] ? `hraness/${scoped[1]}` : undefined;

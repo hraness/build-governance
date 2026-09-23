@@ -1,6 +1,6 @@
 # @hraness/build-governance
 
-Build checks that Hraness repositories share. Add it as a dev dependency to enforce the Effect architecture rules, generate the portfolio inventory record from `package.json`, and lint public copy against the Hraness style guide.
+`@hraness/build-governance` holds the build checks that Hraness repositories share. Add it as a dev dependency to enforce the Effect architecture rules, generate the portfolio inventory record from `package.json`, and lint public copy against the Hraness style guide.
 
 Each repository keeps its own settings: an architecture policy map, any product-specific inventory fields, and a `public-copy.config.json`.
 
@@ -57,7 +57,7 @@ Warnings are printed but never fail the run and never enter the baseline.
 | --- | --- |
 | 0 | No error count rose above the baseline |
 | 1 | An error count rose, or there is no baseline and the run found errors |
-| 2 | The options or the config file are invalid |
+| 2 | The options, the config file, or the baseline file are invalid, or a file the config names is missing or invalid |
 
 Other options: `--root <dir>`, `--config <file>`, `--json` for machine-readable output, and `--quiet` to print only errors.
 
@@ -126,7 +126,7 @@ import {
   expectNoInternalVocabulary,
 } from "@hraness/build-governance/public-copy";
 
-expectInstallPinsMatch(readme, packageJson); // the README pins the current version, and no line pins an older one
+expectInstallPinsMatch(readme, packageJson); // at least one line pins this package, and none pins a version older than package.json
 expectRealRunUrl(proofUrl); // a GitHub Actions run link with a real run ID
 expectCountAgreement(count => summary(count)); // "1 check", "3 checks", and "No checks"
 expectNoInternalVocabulary(heroHeading, "heading");
@@ -134,7 +134,7 @@ expectNoInternalVocabulary(heroHeading, "heading");
 
 ## Check Effect architecture
 
-`inspectEffectArchitecture(program, policy)` walks a TypeScript program and reports Effect code that breaks the architecture policy: modules that use Effect without a declared role, native I/O outside an adapter, runtime entry points outside a declared runtime root, Effects that are created and never run, erased failures, and type-checker suppressions. `createArchitectureProgram(tsconfigPath)` builds the program from a repository's `tsconfig.json`.
+`inspectEffectArchitecture(program, policy)` walks a TypeScript program and reports Effect code that breaks the architecture policy, such as modules that use Effect without a declared role, native I/O or ambient time outside an adapter, runtime entry points outside a declared runtime root, Effects that are created and never used, erased failures, and type-checker suppressions. `createArchitectureProgram(tsconfigPath)` builds the program from a repository's `tsconfig.json`.
 
 ```ts
 import { createArchitectureProgram, inspectEffectArchitecture } from "@hraness/build-governance/effect-architecture";

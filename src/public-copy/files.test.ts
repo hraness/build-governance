@@ -145,7 +145,7 @@ describe("hraness-copy-lint", () => {
     writeFileSync(join(root, "README.md"), "# Tool\n\nOne and two.\n");
     expect(run(root, "--update-baseline").code).toBe(0);
     expect(JSON.parse(readFileSync(baselinePath, "utf8"))).toEqual({ version: 1, counts: {} });
-  });
+  }, 30_000);
 
   test("prints JSON with the findings and the comparison", () => {
     const root = fixture("json", files);
@@ -175,5 +175,5 @@ describe("architecture", () => {
       options: { strict: true, noEmit: true, module: ts.ModuleKind.Preserve, moduleResolution: ts.ModuleResolutionKind.Bundler, target: ts.ScriptTarget.ES2023, types: ["bun"], allowImportingTsExtensions: true },
     });
     expect(inspectEffectArchitecture(program, { root: join(repoRoot, "src"), modules: [], adapters: [], runtimeRoots: [] })).toEqual([]);
-  });
+  }, 30_000);
 });

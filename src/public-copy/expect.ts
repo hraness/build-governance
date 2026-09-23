@@ -16,7 +16,7 @@ export interface InstallPinOptions {
   readonly require?: boolean;
 }
 
-/** Every install pin in `readme` names the version in `package.json`. */
+/** At least one line in `readme` pins this package (unless `require` is false), and none pins a version older than `package.json`. */
 export function expectInstallPinsMatch(readme: string, pkg: PackageIdentity, options: InstallPinOptions = {}): void {
   const pins = findInstallPins(readme, pkg);
   if ((options.require ?? true) && pins.length === 0) {

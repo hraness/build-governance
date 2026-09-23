@@ -4,8 +4,11 @@ import type { CopyFinding } from "./types.js";
 export interface PackageIdentity {
   readonly name: string;
   readonly version: string;
-  /** `owner/repo`. Derived from an `@hraness/<name>` package name when omitted. */
-  readonly repository?: string;
+  /**
+   * `owner/repo`, a repository URL, or package.json's `{ type, url }` object. Derived from an
+   * `@hraness/<name>` package name when omitted.
+   */
+  readonly repository?: string | { readonly url?: string };
 }
 
 export interface TextSource {
@@ -47,9 +50,10 @@ function escapeRegExp(value: string): string {
 
 /** The repository slug a package is released from, such as `hraness/build-governance`. */
 export function repositoryFor(pkg: PackageIdentity): string | undefined {
-  if (pkg.repository) {
-    const match = /github\.com[/:]([^/]+\/[^/#]+?)(?:\.git)?(?:#.*)?$/.exec(pkg.repository);
-    return match?.[1] ?? pkg.repository.replace(/\.git$/, "");
+  const raw = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
+  if (raw) {
+    const match = /github\.com[/:]([^/]+\/[^/#]+?)(?:\.git)?(?:#.*)?$/.exec(raw);
+    return match?.[1] ?? raw.replace(/\.git$/, "");
   }
   const scoped = /^@hraness\/(.+)$/.exec(pkg.name);
   return scoped?.[1] ? `hraness/${scoped[1]}` : undefined;
