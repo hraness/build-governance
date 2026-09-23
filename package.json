@@ -1,7 +1,7 @@
 {
   "name": "@hraness/build-governance",
-  "version": "0.1.0",
-  "description": "Shared Hraness build-governance scripts and canonical inventory logic.",
+  "version": "0.2.0",
+  "description": "Build checks shared by Hraness repositories: Effect architecture rules, package inventory, and a public copy lint.",
   "license": "MIT",
   "type": "module",
   "packageManager": "bun@1.3.14",
@@ -14,6 +14,9 @@
     "url": "git+https://github.com/hraness/build-governance.git"
   },
   "homepage": "https://github.com/hraness/build-governance",
+  "bin": {
+    "hraness-copy-lint": "./dist/public-copy-cli.js"
+  },
   "files": [
     "dist",
     "src",
@@ -32,13 +35,18 @@
     "./portfolio-inventory": {
       "types": "./src/portfolio-inventory.ts",
       "import": "./dist/portfolio-inventory.js"
+    },
+    "./public-copy": {
+      "types": "./src/public-copy.ts",
+      "import": "./dist/public-copy.js"
     }
   },
   "scripts": {
-    "build": "bun build ./src/index.ts ./src/effect-architecture.ts ./src/portfolio-inventory.ts --outdir ./dist --root ./src --target bun --format esm --packages external",
+    "build": "bun build ./src/index.ts ./src/effect-architecture.ts ./src/portfolio-inventory.ts ./src/public-copy.ts ./src/public-copy-cli.ts --outdir ./dist --root ./src --target bun --format esm --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./src",
-    "check": "bun run typecheck && bun run test"
+    "check:copy": "bun ./src/public-copy-cli.ts",
+    "check": "bun run typecheck && bun run test && bun run check:copy"
   },
   "peerDependencies": {
     "typescript": "^6.0.3"

@@ -1,0 +1,6 @@
+{
+  "markdown": ["README.md"],
+  "package": "package.json",
+  "vocabulary": { "allowWithDefinition": ["surface", "lease"] },
+  "guides": "required"
+}
