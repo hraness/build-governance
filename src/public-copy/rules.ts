@@ -7,6 +7,7 @@ import type {
   CopySeverity,
   CopySurface,
 } from "./types.js";
+import { splitTitle } from "./scanners.js";
 
 /** Bump when a rule or list changes, so a pin bump names the lint version it brings. */
 export const PUBLIC_COPY_RULES_VERSION = "hraness-public-copy/v0";
@@ -158,7 +159,7 @@ function codePointLength(text: string): number {
 }
 
 function titleSegments(title: string): string[] {
-  return title.split(/\s*[·|]\s*|\s+[–—-]\s+|:\s+/).map(part => part.trim().toLowerCase()).filter(Boolean);
+  return splitTitle(title).map(part => part.trim().toLowerCase()).filter(Boolean);
 }
 
 /** Lint one piece of text for one surface. */

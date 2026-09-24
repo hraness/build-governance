@@ -1,5 +1,6 @@
 import { extractHtml } from "./html.js";
 import { definedTerms, excerptAt, lintCopy, vocabularyFor } from "./rules.js";
+import { removeHtmlTags, replaceBacktickSpans } from "./scanners.js";
 import type { CopyConfig, CopyFinding, CopySurface, ExtractedText } from "./types.js";
 
 /** How a Markdown file is read: ordinary prose, model-written prose, interface reference, or agent text. */
@@ -45,7 +46,7 @@ export function codeSpans(text: string): string[] {
 /** Turn inline Markdown into the text a reader sees. Code spans become `[code]`. */
 export function inlineText(markdown: string, onAlt?: (alt: string) => void): string {
   let text = markdown;
-  text = text.replace(/(`+)([\s\S]*?[^`])\1(?!`)/g, " [code] ");
+  text = replaceBacktickSpans(text, " [code] ");
   text = text.replace(/!\[([^\]]*)\]\([^)]*\)|!\[([^\]]*)\]\[[^\]]*\]/g, (_, alt?: string, refAlt?: string) => {
     onAlt?.(alt ?? refAlt ?? "");
     return "";
@@ -57,7 +58,7 @@ export function inlineText(markdown: string, onAlt?: (alt: string) => void): str
   text = text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   text = text.replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1");
   text = text.replace(/<(?:https?:|mailto:)[^>]+>/g, "");
-  text = text.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+  text = removeHtmlTags(text);
   text = text.replace(/\*\*|__|~~/g, "");
   text = text.replace(/(^|[\s(])[*_](?=\S)([^*_\n]*?\S)[*_](?=[\s).,;:!?]|$)/g, "$1$2");
   text = text.replace(/\\([\\`*_{}[\]()#+\-.!|>])/g, "$1");

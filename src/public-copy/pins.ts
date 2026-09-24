@@ -1,4 +1,5 @@
 import { excerptAt } from "./rules.js";
+import { githubSlug } from "./scanners.js";
 import type { CopyFinding } from "./types.js";
 
 export interface PackageIdentity {
@@ -52,8 +53,7 @@ function escapeRegExp(value: string): string {
 export function repositoryFor(pkg: PackageIdentity): string | undefined {
   const raw = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
   if (raw) {
-    const match = /github\.com[/:]([^/]+\/[^/#]+?)(?:\.git)?(?:#.*)?$/.exec(raw);
-    return match?.[1] ?? raw.replace(/\.git$/, "");
+    return githubSlug(raw) ?? raw.replace(/\.git$/, "");
   }
   const scoped = /^@hraness\/(.+)$/.exec(pkg.name);
   return scoped?.[1] ? `hraness/${scoped[1]}` : undefined;

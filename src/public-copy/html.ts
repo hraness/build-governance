@@ -1,3 +1,4 @@
+import { htmlTokenizer } from "./scanners.js";
 import type { CopyField, CopySurface, ExtractedText } from "./types.js";
 
 const NAMED_ENTITIES: Readonly<Record<string, string>> = {
@@ -103,10 +104,11 @@ export function extractHtml(html: string, location: string): ExtractedText[] {
     bufferTag = "p";
   };
 
-  const tokens = /<!--[\s\S]*?-->|<!doctype[^>]*>|<\/\s*([a-zA-Z][\w:-]*)\s*>|<([a-zA-Z][\w:-]*)((?:\s+[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*)\s*(\/?)>|[^<]+|</gi;
-  let match: RegExpExecArray | null;
-  while ((match = tokens.exec(html)) !== null) {
-    const [token, closing, opening, attributeSource = "", selfClosing] = match;
+  const tokens = htmlTokenizer(html);
+  let position = 0;
+  for (let match = tokens.next(position); match; match = tokens.next(position)) {
+    const { token, closing, opening, attributeSource = "", selfClosing } = match;
+    position = match.end;
     if (token.startsWith("<!--") || /^<!doctype/i.test(token)) continue;
     if (closing) {
       const name = closing.toLowerCase();
@@ -138,10 +140,10 @@ export function extractHtml(html: string, location: string): ExtractedText[] {
       }
       if (RAW_TEXT.has(name) && !selfClosing) {
         const end = new RegExp(`</\\s*${name}\\s*>`, "gi");
-        end.lastIndex = tokens.lastIndex;
+        end.lastIndex = position;
         const close = end.exec(html);
-        const content = html.slice(tokens.lastIndex, close ? close.index : html.length);
-        tokens.lastIndex = close ? end.lastIndex : html.length;
+        const content = html.slice(position, close ? close.index : html.length);
+        position = close ? end.lastIndex : html.length;
         if (name === "title" && !stack.includes("svg")) push("title", decodeEntities(content), `${location}#title`, "title");
         if (name === "script" && /application\/ld\+json/i.test(attrs.get("type") ?? "")) {
           let parsed: unknown;

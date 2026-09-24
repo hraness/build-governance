@@ -242,6 +242,344 @@ function checkGuideText(name, text, location = name) {
   return findings;
 }
 
+// src/public-copy/scanners.ts
+var SLASH = 47;
+var HASH = 35;
+var COLON = 58;
+var BACKTICK = 96;
+var LT = 60;
+var GT = 62;
+var EQUALS = 61;
+var DOUBLE_QUOTE = 34;
+var SINGLE_QUOTE = 39;
+var DASH = 45;
+var PIPE = 124;
+var MIDDLE_DOT = 183;
+var EN_DASH = 8211;
+var EM_DASH = 8212;
+function isWhitespace(code) {
+  if (code <= 32)
+    return code === 32 || code >= 9 && code <= 13;
+  return code === 160 || code === 5760 || code >= 8192 && code <= 8202 || code === 8232 || code === 8233 || code === 8239 || code === 8287 || code === 12288 || code === 65279;
+}
+function isLineTerminator(code) {
+  return code === 10 || code === 13 || code === 8232 || code === 8233;
+}
+function isAsciiLetter(code) {
+  return code >= 65 && code <= 90 || code >= 97 && code <= 122;
+}
+function isDigit(code) {
+  return code >= 48 && code <= 57;
+}
+function isTagNameChar(code) {
+  return isAsciiLetter(code) || isDigit(code) || code === 95 || code === COLON || code === DASH;
+}
+function isAttributeNameChar(code) {
+  return !isWhitespace(code) && code !== DOUBLE_QUOTE && code !== SINGLE_QUOTE && code !== GT && code !== SLASH && code !== EQUALS;
+}
+function isUnquotedValueChar(code) {
+  return !isWhitespace(code) && code !== DOUBLE_QUOTE && code !== SINGLE_QUOTE && code !== EQUALS && code !== LT && code !== GT && code !== BACKTICK;
+}
+function lineFreeSuffixStart(text) {
+  let start = text.length;
+  while (start > 0 && !isLineTerminator(text.charCodeAt(start - 1)))
+    start -= 1;
+  return start;
+}
+function githubSlug(raw) {
+  const n = raw.length;
+  const nextSlash = new Int32Array(n + 1);
+  const nextHash = new Int32Array(n + 1);
+  nextSlash[n] = n;
+  nextHash[n] = n;
+  for (let index = n - 1;index >= 0; index -= 1) {
+    const code = raw.charCodeAt(index);
+    nextSlash[index] = code === SLASH ? index : nextSlash[index + 1];
+    nextHash[index] = code === HASH ? index : nextHash[index + 1];
+  }
+  const lineFree = lineFreeSuffixStart(raw);
+  for (let at = raw.indexOf("github.com");at !== -1; at = raw.indexOf("github.com", at + 1)) {
+    const separator = raw.charCodeAt(at + 10);
+    if (separator !== SLASH && separator !== COLON)
+      continue;
+    const owner = at + 11;
+    const slash = nextSlash[owner];
+    if (slash === n || slash === owner)
+      continue;
+    const hash = nextHash[slash + 1];
+    if (hash === slash + 1 || nextSlash[slash + 1] < hash)
+      continue;
+    if (hash < n && hash + 1 < lineFree)
+      continue;
+    let name = raw.slice(slash + 1, hash);
+    if (name.length > 4 && name.endsWith(".git"))
+      name = name.slice(0, -4);
+    return `${raw.slice(owner, slash)}/${name}`;
+  }
+  return;
+}
+function replaceBacktickSpans(text, replacement) {
+  const starts = [];
+  const lengths = [];
+  for (let index = 0;index < text.length; ) {
+    if (text.charCodeAt(index) !== BACKTICK) {
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (end < text.length && text.charCodeAt(end) === BACKTICK)
+      end += 1;
+    starts.push(index);
+    lengths.push(end - index);
+    index = end;
+  }
+  const close = new Int32Array(starts.length).fill(-1);
+  const firstLater = new Map;
+  for (let run = starts.length - 1;run >= 0; run -= 1) {
+    const length = lengths[run];
+    for (let candidate = length;candidate >= 1; candidate -= 1) {
+      const found = firstLater.get(candidate);
+      if (found !== undefined) {
+        close[run] = found;
+        break;
+      }
+    }
+    firstLater.set(length, run);
+  }
+  let out = "";
+  let last = 0;
+  for (let run = 0;run < starts.length; ) {
+    const closing = close[run];
+    if (closing === -1) {
+      run += 1;
+      continue;
+    }
+    out += text.slice(last, starts[run]) + replacement;
+    last = starts[closing] + lengths[closing];
+    run = closing + 1;
+  }
+  return out + text.slice(last);
+}
+function removeHtmlTags(text) {
+  let out = "";
+  let last = 0;
+  let nextGt = -2;
+  for (let index = text.indexOf("<");index !== -1; ) {
+    const letter = text.charCodeAt(index + 1) === SLASH ? index + 2 : index + 1;
+    if (!isAsciiLetter(text.charCodeAt(letter))) {
+      index = text.indexOf("<", index + 1);
+      continue;
+    }
+    if (nextGt <= letter)
+      nextGt = text.indexOf(">", letter + 1);
+    if (nextGt === -1)
+      break;
+    out += text.slice(last, index);
+    last = nextGt + 1;
+    index = text.indexOf("<", last);
+  }
+  return out + text.slice(last);
+}
+function whitespaceEnd(text, index) {
+  let end = index;
+  while (end < text.length && isWhitespace(text.charCodeAt(end)))
+    end += 1;
+  return end;
+}
+function splitTitle(title) {
+  const parts = [];
+  let last = 0;
+  for (let index = 0;index < title.length; ) {
+    const code = title.charCodeAt(index);
+    let end;
+    if (isWhitespace(code)) {
+      const after = whitespaceEnd(title, index);
+      const next = title.charCodeAt(after);
+      if (next === MIDDLE_DOT || next === PIPE)
+        end = whitespaceEnd(title, after + 1);
+      else if ((next === EN_DASH || next === EM_DASH || next === DASH) && isWhitespace(title.charCodeAt(after + 1))) {
+        end = whitespaceEnd(title, after + 1);
+      } else {
+        index = after;
+        continue;
+      }
+    } else if (code === MIDDLE_DOT || code === PIPE) {
+      end = whitespaceEnd(title, index + 1);
+    } else if (code === COLON && isWhitespace(title.charCodeAt(index + 1))) {
+      end = whitespaceEnd(title, index + 1);
+    } else {
+      index += 1;
+      continue;
+    }
+    parts.push(title.slice(last, index));
+    last = end;
+    index = end;
+  }
+  parts.push(title.slice(last));
+  return parts;
+}
+function stripLocationSuffix(location) {
+  const hash = location.indexOf("#", lineFreeSuffixStart(location));
+  let digits = location.length;
+  while (digits > 0 && isDigit(location.charCodeAt(digits - 1)))
+    digits -= 1;
+  const colon = digits < location.length && location.charCodeAt(digits - 1) === COLON ? digits - 1 : -1;
+  const cut = hash === -1 ? colon : colon === -1 ? hash : Math.min(hash, colon);
+  return cut === -1 ? location : location.slice(0, cut);
+}
+function forwardSearch(text, needle) {
+  let searchedFrom = Number.POSITIVE_INFINITY;
+  let found = -1;
+  return (from) => {
+    if (from < searchedFrom || found !== -1 && found < from) {
+      searchedFrom = from;
+      found = text.indexOf(needle, from);
+    }
+    return found;
+  };
+}
+function startsWithIgnoringAsciiCase(text, prefix, index) {
+  if (index + prefix.length > text.length)
+    return false;
+  for (let offset = 0;offset < prefix.length; offset += 1) {
+    const expected = prefix.charCodeAt(offset);
+    const actual = text.charCodeAt(index + offset);
+    if (actual !== expected && !(isAsciiLetter(expected) && (actual | 32) === (expected | 32) && isAsciiLetter(actual)))
+      return false;
+  }
+  return true;
+}
+function htmlTokenizer(html) {
+  const n = html.length;
+  let tables;
+  const table = () => {
+    if (tables)
+      return tables;
+    const space = new Int32Array(n + 1);
+    const name = new Int32Array(n + 1);
+    const unquoted = new Int32Array(n + 1);
+    const dq = new Int32Array(n + 1);
+    const sq = new Int32Array(n + 1);
+    space[n] = name[n] = unquoted[n] = dq[n] = sq[n] = n;
+    for (let index = n - 1;index >= 0; index -= 1) {
+      const code = html.charCodeAt(index);
+      space[index] = isWhitespace(code) ? space[index + 1] : index;
+      name[index] = isAttributeNameChar(code) ? name[index + 1] : index;
+      unquoted[index] = isUnquotedValueChar(code) ? unquoted[index + 1] : index;
+      dq[index] = code === DOUBLE_QUOTE ? index : dq[index + 1];
+      sq[index] = code === SINGLE_QUOTE ? index : sq[index + 1];
+    }
+    tables = { space, name, unquoted, dq, sq };
+    return tables;
+  };
+  let memo;
+  const outcomes = [];
+  const attributeList = (start) => {
+    const { space, name, unquoted, dq, sq } = table();
+    memo ??= new Int32Array(n + 1);
+    const visited = [];
+    let result;
+    let at = start;
+    for (;; ) {
+      const known = memo[at];
+      if (known !== 0) {
+        result = outcomes[known - 1];
+        break;
+      }
+      visited.push(at);
+      const next2 = space[at];
+      if (next2 > at && next2 < n && isAttributeNameChar(html.charCodeAt(next2))) {
+        const nameEnd = name[next2];
+        const equals = space[nameEnd];
+        if (equals < n && html.charCodeAt(equals) === EQUALS) {
+          const value = space[equals + 1];
+          const code2 = html.charCodeAt(value);
+          let valueEnd;
+          if (code2 === DOUBLE_QUOTE || code2 === SINGLE_QUOTE) {
+            const quote = (code2 === DOUBLE_QUOTE ? dq : sq)[value + 1];
+            if (quote === n) {
+              result = null;
+              break;
+            }
+            valueEnd = quote + 1;
+          } else if (value < n && isUnquotedValueChar(code2)) {
+            valueEnd = unquoted[value];
+          } else {
+            result = null;
+            break;
+          }
+          at = valueEnd;
+        } else {
+          at = nameEnd;
+        }
+        continue;
+      }
+      const code = html.charCodeAt(next2);
+      if (code === SLASH && html.charCodeAt(next2 + 1) === GT)
+        result = { attributeEnd: at, end: next2 + 2, selfClosing: "/" };
+      else if (code === GT)
+        result = { attributeEnd: at, end: next2 + 1, selfClosing: "" };
+      else
+        result = null;
+      break;
+    }
+    outcomes.push(result);
+    for (const index of visited)
+      memo[index] = outcomes.length;
+    return result;
+  };
+  const commentEnd = forwardSearch(html, "-->");
+  const gt = forwardSearch(html, ">");
+  const next = (index) => {
+    if (index >= n)
+      return;
+    if (html.charCodeAt(index) !== LT) {
+      const lt = html.indexOf("<", index);
+      const end = lt === -1 ? n : lt;
+      return { token: html.slice(index, end), end };
+    }
+    if (html.startsWith("<!--", index)) {
+      const close = commentEnd(index + 4);
+      if (close !== -1)
+        return { token: html.slice(index, close + 3), end: close + 3 };
+    }
+    if (startsWithIgnoringAsciiCase(html, "<!doctype", index)) {
+      const close = gt(index + 9);
+      if (close !== -1)
+        return { token: html.slice(index, close + 1), end: close + 1 };
+    }
+    if (html.charCodeAt(index + 1) === SLASH) {
+      const { space } = table();
+      const nameStart = space[index + 2];
+      if (isAsciiLetter(html.charCodeAt(nameStart))) {
+        let nameEnd = nameStart + 1;
+        while (nameEnd < n && isTagNameChar(html.charCodeAt(nameEnd)))
+          nameEnd += 1;
+        const close = space[nameEnd];
+        if (html.charCodeAt(close) === GT) {
+          return { token: html.slice(index, close + 1), end: close + 1, closing: html.slice(nameStart, nameEnd) };
+        }
+      }
+    } else if (isAsciiLetter(html.charCodeAt(index + 1))) {
+      let nameEnd = index + 2;
+      while (nameEnd < n && isTagNameChar(html.charCodeAt(nameEnd)))
+        nameEnd += 1;
+      const tag = attributeList(nameEnd);
+      if (tag) {
+        return {
+          token: html.slice(index, tag.end),
+          end: tag.end,
+          opening: html.slice(index + 1, nameEnd),
+          attributeSource: html.slice(nameEnd, tag.attributeEnd),
+          selfClosing: tag.selfClosing
+        };
+      }
+    }
+    return { token: "<", end: index + 1 };
+  };
+  return { next };
+}
+
 // src/public-copy/html.ts
 var NAMED_ENTITIES = {
   amp: "&",
@@ -414,10 +752,11 @@ function extractHtml(html, location) {
     bufferSurface = "body";
     bufferTag = "p";
   };
-  const tokens = /<!--[\s\S]*?-->|<!doctype[^>]*>|<\/\s*([a-zA-Z][\w:-]*)\s*>|<([a-zA-Z][\w:-]*)((?:\s+[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*)\s*(\/?)>|[^<]+|</gi;
-  let match;
-  while ((match = tokens.exec(html)) !== null) {
-    const [token, closing, opening, attributeSource = "", selfClosing] = match;
+  const tokens = htmlTokenizer(html);
+  let position = 0;
+  for (let match = tokens.next(position);match; match = tokens.next(position)) {
+    const { token, closing, opening, attributeSource = "", selfClosing } = match;
+    position = match.end;
     if (token.startsWith("<!--") || /^<!doctype/i.test(token))
       continue;
     if (closing) {
@@ -458,10 +797,10 @@ function extractHtml(html, location) {
       }
       if (RAW_TEXT.has(name) && !selfClosing) {
         const end = new RegExp(`</\\s*${name}\\s*>`, "gi");
-        end.lastIndex = tokens.lastIndex;
+        end.lastIndex = position;
         const close = end.exec(html);
-        const content = html.slice(tokens.lastIndex, close ? close.index : html.length);
-        tokens.lastIndex = close ? end.lastIndex : html.length;
+        const content = html.slice(position, close ? close.index : html.length);
+        position = close ? end.lastIndex : html.length;
         if (name === "title" && !stack.includes("svg"))
           push("title", decodeEntities(content), `${location}#title`, "title");
         if (name === "script" && /application\/ld\+json/i.test(attrs.get("type") ?? "")) {
@@ -722,7 +1061,7 @@ function codePointLength(text) {
   return [...text].length;
 }
 function titleSegments(title) {
-  return title.split(/\s*[\u00B7|]\s*|\s+[\u2013\u2014-]\s+|:\s+/).map((part) => part.trim().toLowerCase()).filter(Boolean);
+  return splitTitle(title).map((part) => part.trim().toLowerCase()).filter(Boolean);
 }
 function lintCopy(text, opts) {
   const findings = [];
@@ -876,7 +1215,7 @@ function codeSpans(text) {
 }
 function inlineText(markdown, onAlt) {
   let text = markdown;
-  text = text.replace(/(`+)([\s\S]*?[^`])\1(?!`)/g, " [code] ");
+  text = replaceBacktickSpans(text, " [code] ");
   text = text.replace(/!\[([^\]]*)\]\([^)]*\)|!\[([^\]]*)\]\[[^\]]*\]/g, (_, alt, refAlt) => {
     onAlt?.(alt ?? refAlt ?? "");
     return "";
@@ -888,7 +1227,7 @@ function inlineText(markdown, onAlt) {
   text = text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   text = text.replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1");
   text = text.replace(/<(?:https?:|mailto:)[^>]+>/g, "");
-  text = text.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+  text = removeHtmlTags(text);
   text = text.replace(/\*\*|__|~~/g, "");
   text = text.replace(/(^|[\s(])[*_](?=\S)([^*_\n]*?\S)[*_](?=[\s).,;:!?]|$)/g, "$1$2");
   text = text.replace(/\\([\\`*_{}[\]()#+\-.!|>])/g, "$1");
@@ -1106,8 +1445,7 @@ function escapeRegExp2(value) {
 function repositoryFor(pkg) {
   const raw = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
   if (raw) {
-    const match = /github\.com[/:]([^/]+\/[^/#]+?)(?:\.git)?(?:#.*)?$/.exec(raw);
-    return match?.[1] ?? raw.replace(/\.git$/, "");
+    return githubSlug(raw) ?? raw.replace(/\.git$/, "");
   }
   const scoped = /^@hraness\/(.+)$/.exec(pkg.name);
   return scoped?.[1] ? `hraness/${scoped[1]}` : undefined;
@@ -1323,7 +1661,7 @@ function runPublicCopy(root, config) {
 }
 function sortFindings(findings) {
   const lineOf2 = (location) => Number(/:(\d+)$/.exec(location)?.[1] ?? 0);
-  const fileOf = (location) => location.replace(/(?:#.*|:\d+)$/, "");
+  const fileOf = stripLocationSuffix;
   return [...findings].sort((a, b) => fileOf(a.location).localeCompare(fileOf(b.location)) || lineOf2(a.location) - lineOf2(b.location) || a.location.localeCompare(b.location) || a.rule.localeCompare(b.rule) || a.excerpt.localeCompare(b.excerpt));
 }
 function loadCopyConfig(root, configPath = DEFAULT_CONFIG_FILE) {

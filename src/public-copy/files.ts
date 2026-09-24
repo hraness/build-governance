@@ -15,6 +15,7 @@ import type { MarkdownKind } from "./markdown.js";
 import { checkInstallPins } from "./pins.js";
 import type { TextSource } from "./pins.js";
 import { excerptAt, lintCopy } from "./rules.js";
+import { stripLocationSuffix } from "./scanners.js";
 import type { CopyConfig, CopyFinding } from "./types.js";
 
 export interface GuideCheckOptions {
@@ -164,7 +165,7 @@ export function runPublicCopy(root: string, config: CopyConfig): PublicCopyResul
 
 export function sortFindings(findings: readonly CopyFinding[]): CopyFinding[] {
   const lineOf = (location: string): number => Number(/:(\d+)$/.exec(location)?.[1] ?? 0);
-  const fileOf = (location: string): string => location.replace(/(?:#.*|:\d+)$/, "");
+  const fileOf = stripLocationSuffix;
   return [...findings].sort((a, b) =>
     fileOf(a.location).localeCompare(fileOf(b.location)) || lineOf(a.location) - lineOf(b.location) ||
     a.location.localeCompare(b.location) || a.rule.localeCompare(b.rule) || a.excerpt.localeCompare(b.excerpt));
