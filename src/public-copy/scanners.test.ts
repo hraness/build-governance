@@ -19,6 +19,17 @@ const HTML_TOKEN = /<!--[\s\S]*?-->|<!doctype[^>]*>|<\/\s*([a-zA-Z][\w:-]*)\s*>|
 const over = (pieces: readonly string[], maxLength = 40): fc.Arbitrary<string> =>
   fc.array(fc.constantFrom(...pieces), { maxLength }).map(parts => parts.join(""));
 
+/** `text` with every match of the global `pattern` cut out: the reference for a tag-removing `replace`. */
+function withoutMatches(text: string, pattern: RegExp): string {
+  let out = "";
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    out += text.slice(last, match.index);
+    last = match.index + match[0].length;
+  }
+  return out + text.slice(last);
+}
+
 const RUNS = { numRuns: 3000 };
 
 /** Milliseconds `run` takes. The quadratic regular expressions took minutes on these inputs. */
@@ -55,7 +66,7 @@ describe("scanners match the regular expressions they replace", () => {
 
   test("removeHtmlTags", () => {
     fc.assert(fc.property(over(["<", ">", "/", "a", "Z", "1", " ", "\n", "<b>", "</i>"]), text => {
-      expect(removeHtmlTags(text)).toBe(text.replace(HTML_TAG, ""));
+      expect(removeHtmlTags(text)).toBe(withoutMatches(text, HTML_TAG));
     }), RUNS);
   });
 
