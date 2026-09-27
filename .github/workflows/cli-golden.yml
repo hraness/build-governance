@@ -55,6 +55,10 @@ on:
         description: "advisory (warn, never fail) or required (fail on problems)"
         type: string
         default: advisory
+      use-checkout:
+        description: "Use the checked-out repository as build-governance. Only for build-governance's own CI."
+        type: boolean
+        default: false
       governance-ref:
         description: "build-governance tag or branch that provides the harness"
         type: string
@@ -68,7 +72,7 @@ jobs:
     name: CLI golden checks (${{ inputs.mode }})
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 30
-    continue-on-error: ${{ inputs.mode != 'required' }}
+    continue-on-error: ${{ inputs.mode == 'advisory' }}
     steps:
       - name: Check the mode
         env:
@@ -108,8 +112,13 @@ jobs:
       - name: Get the harness
         env:
           REF: ${{ inputs.governance-ref }}
+          USE_CHECKOUT: ${{ inputs.use-checkout }}
         run: |
           set -euo pipefail
+          if [[ "$USE_CHECKOUT" == true ]]; then
+            echo "GOVERNANCE=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+            exit 0
+          fi
           git clone --quiet --depth 1 --branch "$REF" https://github.com/hraness/build-governance.git "$RUNNER_TEMP/build-governance"
           echo "GOVERNANCE=$RUNNER_TEMP/build-governance" >> "$GITHUB_ENV"
       - name: Run the golden checks
@@ -142,7 +151,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cli-goldens-${{ inputs.name || 'cli' }}-${{ github.run_attempt }}
+          name: cli-goldens-${{ inputs.name || 'cli' }}-${{ runner.os }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/cli-goldens
           if-no-files-found: ignore
           retention-days: 7

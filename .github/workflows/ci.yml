@@ -47,7 +47,7 @@ jobs:
           bun src/cli-golden-cli.ts --cli "bun src/cli-golden/fixtures/good-cli.ts" --name demo --json \
             | jq -e '.results[] | select(.id == "NO_COLOR") | .status == "pass"'
 
-  # The reusable workflows, called the way a product calls them, against this branch's tools.
+  # The reusable workflows, called the way a product calls them, with the tools from this commit.
   golden-follows-contract:
     uses: ./.github/workflows/cli-golden.yml
     with:
@@ -55,7 +55,7 @@ jobs:
       name: demo
       commands: setup,status
       mode: required
-      governance-ref: ${{ github.head_ref || github.ref_name }}
+      use-checkout: true
 
   golden-breaks-contract-advisory:
     uses: ./.github/workflows/cli-golden.yml
@@ -64,7 +64,7 @@ jobs:
       name: bad
       commands: status
       mode: advisory
-      governance-ref: ${{ github.head_ref || github.ref_name }}
+      use-checkout: true
 
   copy-follows-contract:
     uses: ./.github/workflows/ux-copy.yml
@@ -75,7 +75,7 @@ jobs:
       command-goldens: fixtures/ux/help/*.help.txt
       proper-nouns: Demo
       mode: required
-      governance-ref: ${{ github.head_ref || github.ref_name }}
+      use-checkout: true
 
   Required:
     if: always()

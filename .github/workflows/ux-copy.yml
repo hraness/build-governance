@@ -45,6 +45,10 @@ on:
         description: "SHA-256 of that release's SDK tarball. Change it with the tag."
         type: string
         default: 0f6378ef34f42d56df818cfba285547fd71a6f9de556156bb42110013e6ca191
+      use-checkout:
+        description: "Use the checked-out repository as build-governance. Only for build-governance's own CI."
+        type: boolean
+        default: false
       governance-ref:
         description: "build-governance tag or branch that provides the lint"
         type: string
@@ -58,7 +62,7 @@ jobs:
     name: CLI and menu copy (${{ inputs.mode }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: ${{ inputs.mode != 'required' }}
+    continue-on-error: ${{ inputs.mode == 'advisory' }}
     steps:
       - name: Check the mode
         env:
@@ -74,8 +78,13 @@ jobs:
       - name: Get the lint
         env:
           REF: ${{ inputs.governance-ref }}
+          USE_CHECKOUT: ${{ inputs.use-checkout }}
         run: |
           set -euo pipefail
+          if [[ "$USE_CHECKOUT" == true ]]; then
+            echo "GOVERNANCE=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+            exit 0
+          fi
           git clone --quiet --depth 1 --branch "$REF" https://github.com/hraness/build-governance.git "$RUNNER_TEMP/build-governance"
           echo "GOVERNANCE=$RUNNER_TEMP/build-governance" >> "$GITHUB_ENV"
       - name: Get desktop-foundation's menu lint

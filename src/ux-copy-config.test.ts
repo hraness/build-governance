@@ -42,6 +42,6 @@ describe("reusable workflows", () => {
   test.each(["ux-copy.yml", "cli-golden.yml"])("%s is advisory unless the caller asks for required", file => {
     const workflow = readFileSync(join(repoRoot, ".github", "workflows", file), "utf8");
     expect(workflow).toMatch(/mode:\n(?:\s+\w[^\n]*\n)*?\s+default: advisory/);
-    expect(workflow).toContain("continue-on-error: ${{ inputs.mode != 'required' }}");
+    expect(workflow).toContain("continue-on-error: ${{ inputs.mode == 'advisory' }}");
   });
 });

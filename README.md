@@ -213,7 +213,7 @@ jobs:
       proper-nouns: Mom
 ```
 
-- `cli-golden.yml` builds the CLI (`build`, with `setup: node` or `setup: rust` for those toolchains and `runs-on` for macOS tools), runs `hraness-cli-golden`, and keeps the captured output as a `cli-goldens-<name>` artifact.
+- `cli-golden.yml` builds the CLI (`build`, with `setup: node` or `setup: rust` for those toolchains and `runs-on` for macOS tools), runs `hraness-cli-golden`, and keeps the captured output as a `cli-goldens-<name>-<OS>` artifact.
 - `ux-copy.yml` runs `hraness-copy-lint --only cli,menus` over the captured help and the menu fixtures, with desktop-foundation's menu lint from the release named by `desktop-foundation` (default `v0.8.0`, checked against `desktop-foundation-sha256`). A repository that already has `cli` and `menus` in its `public-copy.config.json` passes `config: public-copy.config.json` instead.
 
 To make a check required, once its findings are fixed:
