@@ -350,7 +350,7 @@ function htmlTokenizer(html) {
 }
 
 // src/public-copy/rules.ts
-var PUBLIC_COPY_RULES_VERSION = "hraness-public-copy/v0";
+var PUBLIC_COPY_RULES_VERSION = "hraness-public-copy/v1";
 var INTERNAL_VOCABULARY = [
   "admission",
   "admitted",
@@ -1367,7 +1367,8 @@ function serializeBaseline(counts) {
 // src/public-copy/config.ts
 var DEFAULT_CONFIG_FILE = "public-copy.config.json";
 var DEFAULT_BASELINE_FILE = ".public-copy-baseline.json";
-var KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides"]);
+var KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides", "cli", "menus", "properNouns"]);
+var CLI_KINDS = new Set(["bare", "help", "command"]);
 function object(value, label) {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new Error(`${label} must be an object.`);
@@ -1431,6 +1432,33 @@ function parseCopyConfig(value) {
       ...vocabulary.allowWithDefinition === undefined ? {} : { allowWithDefinition: strings(vocabulary.allowWithDefinition, "vocabulary.allowWithDefinition") }
     };
   }
+  if (raw.cli !== undefined) {
+    if (!Array.isArray(raw.cli))
+      throw new Error("cli must be an array.");
+    config.cli = raw.cli.map((entry, index) => {
+      const item = object(entry, `cli[${index}]`);
+      for (const key of Object.keys(item)) {
+        if (key !== "files" && key !== "kind")
+          throw new Error(`Unknown cli[${index}] key \u201C${key}\u201D.`);
+      }
+      if (typeof item.kind !== "string" || !CLI_KINDS.has(item.kind))
+        throw new Error(`cli[${index}].kind must be one of bare, help, command.`);
+      return { files: file(item.files, `cli[${index}].files`), kind: item.kind };
+    });
+  }
+  if (raw.menus !== undefined) {
+    const menus = object(raw.menus, "menus");
+    for (const key of Object.keys(menus)) {
+      if (key !== "fixtures" && key !== "companion")
+        throw new Error(`Unknown menus key \u201C${key}\u201D.`);
+    }
+    config.menus = {
+      fixtures: strings(menus.fixtures, "menus.fixtures"),
+      ...menus.companion === undefined ? {} : { companion: file(menus.companion, "menus.companion") }
+    };
+  }
+  if (raw.properNouns !== undefined)
+    config.properNouns = strings(raw.properNouns, "properNouns");
   if (raw.brand !== undefined)
     config.brand = file(raw.brand, "brand");
   if (raw.package !== undefined)
@@ -1491,13 +1519,364 @@ function selectJsonPath(value, path) {
   return current;
 }
 // src/public-copy/files.ts
-import { existsSync, readFileSync, writeFileSync } from "fs";
-import { join, relative, resolve } from "path";
+import { existsSync as existsSync2, readFileSync as readFileSync2, writeFileSync } from "fs";
+import { join as join2, relative, resolve as resolve2 } from "path";
+
+// src/public-copy/cli-help.ts
+var CLI_HELP_KINDS = ["bare", "help", "command"];
+var CLI_HELP_BUDGETS = {
+  bare: { lines: 25, linesSeverity: "error", columns: 80, columnsSeverity: "error" },
+  help: { lines: 60, linesSeverity: "error", columns: 100, columnsSeverity: "warn" },
+  command: { lines: 60, linesSeverity: "warn", columns: 100, columnsSeverity: "warn" }
+};
+var CLI_JARGON = [
+  "admission",
+  "admitted",
+  "qualification",
+  "qualified",
+  "custody",
+  "receipt",
+  "lane",
+  "gate",
+  "surface",
+  "projection",
+  "habitat",
+  "organism"
+];
+var CLI_JARGON_WARN_ONLY = ["pin"];
+var CLI_PROPER_NOUNS = [
+  "Mac",
+  "Messages",
+  "Chrome",
+  "Safari",
+  "Firefox",
+  "Edge",
+  "Brave",
+  "Arc",
+  "Finder",
+  "System Settings",
+  "Keychain Access",
+  "Privacy & Security",
+  "Full Disk Access",
+  "Automation",
+  "Contacts",
+  "Accessibility",
+  "Screen & System Audio Recording",
+  "Camera",
+  "Microphone",
+  "Local Network",
+  "Firewall",
+  "Notifications",
+  "Login Items & Extensions",
+  "Login Items",
+  "Settings",
+  "Enter",
+  "Return",
+  "Escape",
+  "Option",
+  "Command",
+  "Control",
+  "Shift",
+  "Always Allow",
+  "Allow",
+  "Don't Allow",
+  "Apple",
+  "Apple Intelligence",
+  "Xcode",
+  "Terminal",
+  "Ghostty",
+  "Zed",
+  "Warp",
+  "WezTerm",
+  "Visual Studio Code",
+  "Windows",
+  "Linux",
+  "Homebrew",
+  "Bun",
+  "Node",
+  "Deno",
+  "Rust",
+  "Swift",
+  "Python",
+  "Markdown",
+  "Git",
+  "Google",
+  "Slack",
+  "Stripe",
+  "Vercel",
+  "Cloudflare",
+  "Claude",
+  "Claude Code",
+  "Codex",
+  "Devin",
+  "Cursor",
+  "Gemini",
+  "OpenAI",
+  "Anthropic",
+  "Ollama",
+  "Hraness",
+  "Textbutler",
+  "Ghostget",
+  "Wordcell",
+  "Sponge",
+  "PeopleBlade",
+  "AI Charts",
+  "Slopcamera",
+  "Valhalla",
+  "Soundfish",
+  "Gobstopper",
+  "Morphogen",
+  "Lifecharts",
+  "System One",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+  "English"
+];
+var ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+function escapeRegExp3(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function columns(line) {
+  return [...line].length;
+}
+function helpLines(text) {
+  const lines = text.replace(ANSI, "").replace(/\r\n?/g, `
+`).split(`
+`);
+  while (lines.length && !lines[lines.length - 1].trim())
+    lines.pop();
+  return lines;
+}
+function literalSpans(text) {
+  const spans = [];
+  const patterns = [
+    /`[^`]*`/g,
+    /"[^"]*"/g,
+    /\u201C[^\u201D]*\u201D/g,
+    /'[^'\s][^']*'/g,
+    /<[^>]*>/g,
+    /\[[^\]]*\]/g,
+    /\{[^}]*\}/g,
+    /(?<!\S)--?[A-Za-z][\w-]*(?:[= ]<[^>]*>)?/g,
+    /\S*[/\\~@]\S*/g,
+    /\S+\.\S+/g
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern))
+      spans.push([match.index, match.index + match[0].length]);
+  }
+  return spans;
+}
+function sentenceCaseBreak(text, nouns) {
+  const exempt = literalSpans(text);
+  for (const noun of nouns) {
+    for (const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp3(noun)}(?![\\p{L}\\p{N}])`, "gu"))) {
+      exempt.push([match.index, match.index + noun.length]);
+    }
+  }
+  for (const match of text.matchAll(/\S+/g)) {
+    const before = text.slice(0, match.index);
+    if (!before.trim() || /(?:[.!?:\u00B7|\u2022]|\s[-\u2013]|\()\s*$/.test(before))
+      continue;
+    const lead = match[0].search(/[\p{L}\p{N}]/u);
+    if (lead === -1)
+      continue;
+    const start = match.index + lead;
+    if (exempt.some(([from, to]) => start >= from && start < to))
+      continue;
+    const bare = match[0].replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (!/^\p{Lu}\p{Ll}+(?:'\p{Ll}+)?$/u.test(bare))
+      continue;
+    return { word: bare, index: start };
+  }
+  return;
+}
+function proseOf(line, index) {
+  if (!line.trim())
+    return;
+  const indent = /^\s*/.exec(line)[0].length;
+  if (indent === 0) {
+    if (/^usage:/i.test(line))
+      return;
+    const gap2 = /\S( {2,}|\t)\S/.exec(line);
+    if (gap2)
+      return { text: line.slice(gap2.index + 1 + gap2[1].length), offset: gap2.index + 1 + gap2[1].length, role: "summary" };
+    return { text: line, offset: 0, role: index === 0 ? "prose" : "heading" };
+  }
+  const gap = /\S( {2,}|\t)(?=\S)/.exec(line.slice(indent));
+  if (gap) {
+    const offset = indent + gap.index + 1 + gap[1].length;
+    return { text: line.slice(offset), offset, role: "summary" };
+  }
+  const trimmed = line.trim();
+  if (/^[$>#]/.test(trimmed) || /^[a-z0-9][\w.-]*(\s|$)/.test(trimmed) && !/[.!?]$/.test(trimmed))
+    return;
+  return { text: trimmed, offset: indent, role: "prose" };
+}
+function glossed(line, term) {
+  if (definedTerms(line, [term]).size)
+    return true;
+  return new RegExp(`\\((?:an?\\s+|the\\s+)?${termPattern(term)}\\)`, "i").test(line);
+}
+function lintCliHelp(text, options) {
+  const findings = [];
+  const { kind, location, config } = options;
+  const lines = helpLines(text);
+  const budget = CLI_HELP_BUDGETS[kind];
+  const add = (rule, severity, line, excerpt, hint) => {
+    findings.push({ rule, severity, surface: "body", location: `${location}:${line}`, excerpt, hint });
+  };
+  if (lines.length > budget.lines) {
+    const what = kind === "bare" ? "A bare invocation" : kind === "help" ? "Root help" : "Command help";
+    add("cli-budget", budget.linesSeverity, budget.lines + 1, `${lines.length} lines`, `${what} prints ${lines.length} lines. Keep it to ${budget.lines}${kind === "help" ? "; move advanced verbs to `help advanced`" : kind === "bare" ? ": a one-line description, 3 to 5 starter commands, and the help pointer" : ""}.`);
+  }
+  lines.forEach((line, index) => {
+    const width = columns(line);
+    if (width > budget.columns) {
+      add("cli-budget", budget.columnsSeverity, index + 1, excerptAt(line, budget.columns - 20, 20), `Line is ${width} columns. Keep ${kind === "bare" ? "a bare invocation" : "help"} to ${budget.columns}; wrap the summary or shorten it.`);
+    }
+  });
+  const nouns = [...new Set([...CLI_PROPER_NOUNS, ...config?.properNouns ?? [], ...options.properNouns ?? [], ...config?.brand ? [config.brand] : []])].sort((a, b) => b.length - a.length);
+  const added = (config?.vocabulary?.add ?? []).map((term) => term.toLowerCase());
+  const errorTerms = [...new Set([...CLI_JARGON, ...added])];
+  const warnTerms = [...new Set([...CLI_JARGON_WARN_ONLY, ...INTERNAL_VOCABULARY.map((term) => term.toLowerCase())])].filter((term) => !errorTerms.includes(term));
+  lines.forEach((line, index) => {
+    const prose = proseOf(line, index);
+    const lineNo = index + 1;
+    if (prose) {
+      const broken = sentenceCaseBreak(prose.text, nouns);
+      if (broken) {
+        add("cli-case", "error", lineNo, excerptAt(prose.text, broken.index, broken.word.length), `\u201C${broken.word}\u201D is capitalized mid-sentence. Use sentence case, or add the name to properNouns.`);
+      }
+    }
+    for (const [terms, severity] of [[errorTerms, "error"], [warnTerms, "warn"]]) {
+      for (const term of terms) {
+        for (const match of line.matchAll(new RegExp(termPattern(term), "gi"))) {
+          if (glossed(line, term))
+            continue;
+          add("cli-jargon", severity, lineNo, excerptAt(line, match.index, match[0].length), `\u201C${match[0]}\u201D is internal vocabulary. Say what the person gets, or gloss it on the same line, as in \u201C${match[0]} (what it means)\u201D.`);
+        }
+      }
+    }
+    if (prose) {
+      for (const finding of lintCopy(prose.text, { surface: "body", location: `${location}:${lineNo}`, ...config ? { config } : {} })) {
+        if (finding.rule === "emdash" || finding.rule === "selfcert" || finding.rule === "retired")
+          findings.push(finding);
+      }
+    }
+  });
+  return findings;
+}
+
+// src/public-copy/menus.ts
+import { existsSync, readFileSync } from "fs";
+import { dirname, join, resolve } from "path";
+var DESKTOP_FOUNDATION_PACKAGE = "@hraness/desktop-foundation";
+function menuFindings(report) {
+  const findings = [];
+  for (const result of report.results) {
+    if (!result.valid) {
+      findings.push({
+        rule: "menu",
+        severity: "error",
+        surface: "body",
+        location: result.file,
+        excerpt: `not a valid menu snapshot (${result.error ?? "unknown"})`,
+        hint: "Write the fixture as a protocol v2 snapshot, the JSON the menu sends, one file per state."
+      });
+      continue;
+    }
+    for (const finding of result.findings) {
+      findings.push({
+        rule: "menu",
+        severity: finding.severity === "error" ? "error" : "warn",
+        surface: "body",
+        location: `${result.file}#${finding.path}`,
+        excerpt: `${finding.rule}: ${finding.message}`,
+        hint: "See the menu rules in desktop-foundation docs/protocol-v2.md \xA7 Menu lint."
+      });
+    }
+  }
+  return findings;
+}
+function packageRoot(entry) {
+  let dir = dirname(entry);
+  for (;; ) {
+    const manifest = join(dir, "package.json");
+    if (existsSync(manifest)) {
+      try {
+        if (JSON.parse(readFileSync(manifest, "utf8")).name === DESKTOP_FOUNDATION_PACKAGE)
+          return dir;
+      } catch {}
+    }
+    const parent = dirname(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function findCompanionCli(root, configured, override) {
+  const explicit = override ?? configured;
+  let pkg;
+  if (explicit) {
+    pkg = resolve(root, explicit);
+  } else {
+    try {
+      pkg = packageRoot(Bun.resolveSync(DESKTOP_FOUNDATION_PACKAGE, root));
+    } catch {
+      pkg = undefined;
+    }
+  }
+  const cli = pkg ? join(pkg, "dist", "src", "cli.js") : undefined;
+  if (!cli || !existsSync(cli)) {
+    throw new Error(explicit ? `No desktop-foundation companion CLI at ${cli ?? explicit}. Point --menu-kit or menus.companion at an installed ${DESKTOP_FOUNDATION_PACKAGE} 0.8.0 or later.` : `menus needs ${DESKTOP_FOUNDATION_PACKAGE} 0.8.0 or later. Install it, or pass --menu-kit <package dir>.`);
+  }
+  return cli;
+}
+function lintMenuFixtures(root, files, options) {
+  if (!files.length)
+    return [];
+  const args = [process.execPath, options.companionCli, "lint-menu", "--strict", "--json"];
+  for (const noun of options.properNouns ?? [])
+    args.push("--proper-noun", noun);
+  const run = Bun.spawnSync([...args, ...files], { cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
+  const out = run.stdout.toString().trim();
+  let report;
+  try {
+    report = JSON.parse(out.split(`
+`).pop() ?? "");
+  } catch {
+    throw new Error(`companion lint-menu failed (exit ${run.exitCode}): ${(run.stderr.toString() || out).trim().split(`
+`)[0] ?? ""}`);
+  }
+  if (!Array.isArray(report.results))
+    throw new Error(`companion lint-menu printed an unexpected report (exit ${run.exitCode}).`);
+  return menuFindings(report);
+}
+
+// src/public-copy/files.ts
 function checkGuides(repoRoot, options = {}) {
   const findings = [];
   for (const name of SYNCED_GUIDES) {
-    const path = join(repoRoot, name);
-    if (!existsSync(path)) {
+    const path = join2(repoRoot, name);
+    if (!existsSync2(path)) {
       if (options.required) {
         findings.push({
           rule: "guides",
@@ -1510,7 +1889,7 @@ function checkGuides(repoRoot, options = {}) {
       }
       continue;
     }
-    findings.push(...checkGuideText(name, readFileSync(path, "utf8"), name));
+    findings.push(...checkGuideText(name, readFileSync2(path, "utf8"), name));
   }
   return findings;
 }
@@ -1520,7 +1899,7 @@ function expand(root, patterns, exclude) {
   const files = new Set;
   for (const pattern of patterns) {
     if (!/[*?[{]/.test(pattern)) {
-      if (existsSync(join(root, pattern)))
+      if (existsSync2(join2(root, pattern)))
         files.add(pattern);
       continue;
     }
@@ -1533,9 +1912,11 @@ function expand(root, patterns, exclude) {
   return [...files].sort();
 }
 function read(root, file2) {
-  return readFileSync(join(root, file2), "utf8");
+  return readFileSync2(join2(root, file2), "utf8");
 }
-function runPublicCopy(root, config) {
+var COPY_SECTIONS = ["markdown", "html", "text", "json", "package", "guides", "cli", "menus"];
+function runPublicCopy(root, config, options = {}) {
+  const on = (section) => !options.only || options.only.has(section);
   const exclude = config.exclude ?? [];
   const findings = [];
   const raw = [];
@@ -1547,12 +1928,14 @@ function runPublicCopy(root, config) {
     descriptions.set(key, [...descriptions.get(key) ?? [], location]);
   };
   const kinds = new Map;
-  for (const file2 of expand(root, config.markdown ?? [], exclude))
-    kinds.set(file2, "body");
-  for (const file2 of expand(root, config.reference ?? [], exclude))
-    kinds.set(file2, "reference");
-  for (const file2 of expand(root, config.generated ?? [], exclude))
-    kinds.set(file2, "generated");
+  if (on("markdown")) {
+    for (const file2 of expand(root, config.markdown ?? [], exclude))
+      kinds.set(file2, "body");
+    for (const file2 of expand(root, config.reference ?? [], exclude))
+      kinds.set(file2, "reference");
+    for (const file2 of expand(root, config.generated ?? [], exclude))
+      kinds.set(file2, "generated");
+  }
   for (const [file2, kind] of [...kinds].sort(([a], [b]) => a.localeCompare(b))) {
     const text = read(root, file2);
     raw.push({ location: file2, text });
@@ -1567,7 +1950,7 @@ function runPublicCopy(root, config) {
     if (description)
       noteDescription(description.trim().replace(/^(["'])(.*)\1$/, "$2"), file2);
   }
-  const htmlFiles = expand(root, config.html ?? [], exclude);
+  const htmlFiles = on("html") ? expand(root, config.html ?? [], exclude) : [];
   for (const file2 of htmlFiles) {
     const html = read(root, file2);
     raw.push({ location: file2, text: html });
@@ -1584,9 +1967,9 @@ function runPublicCopy(root, config) {
     }
   }
   const textFiles = [];
-  for (const entry of config.text ?? []) {
-    const path = join(root, entry.file);
-    if (!existsSync(path))
+  for (const entry of on("text") ? config.text ?? [] : []) {
+    const path = join2(root, entry.file);
+    if (!existsSync2(path))
       throw new Error(`text file not found: ${entry.file}`);
     const text = read(root, entry.file);
     textFiles.push(entry.file);
@@ -1598,9 +1981,9 @@ function runPublicCopy(root, config) {
     }
   }
   const jsonFiles = [];
-  for (const entry of config.json ?? []) {
-    const path = join(root, entry.file);
-    if (!existsSync(path))
+  for (const entry of on("json") ? config.json ?? [] : []) {
+    const path = join2(root, entry.file);
+    if (!existsSync2(path))
       throw new Error(`json file not found: ${entry.file}`);
     const parsed = JSON.parse(read(root, entry.file));
     jsonFiles.push(entry.file);
@@ -1610,7 +1993,26 @@ function runPublicCopy(root, config) {
       findings.push(...lintCopy(match.value, { surface: entry.surface, location: `${entry.file}#${match.path}`, config }));
     }
   }
-  if (config.package) {
+  const cliFiles = [];
+  for (const entry of on("cli") ? config.cli ?? [] : []) {
+    const matched = expand(root, [entry.files], exclude);
+    if (!matched.length)
+      throw new Error(`cli files not found: ${entry.files}`);
+    for (const file2 of matched) {
+      cliFiles.push(file2);
+      findings.push(...lintCliHelp(read(root, file2), { kind: entry.kind, location: file2, config }));
+    }
+  }
+  const menuFiles = [];
+  if (on("menus") && config.menus) {
+    const matched = expand(root, config.menus.fixtures, exclude);
+    if (!matched.length)
+      throw new Error(`menu fixtures not found: ${config.menus.fixtures.join(", ")}`);
+    menuFiles.push(...matched);
+    const companionCli = findCompanionCli(root, config.menus.companion, options.menuKit);
+    findings.push(...lintMenuFixtures(root, matched, { companionCli, ...config.properNouns ? { properNouns: config.properNouns } : {} }));
+  }
+  if (on("package") && config.package) {
     const manifest = JSON.parse(read(root, config.package));
     const name = manifest.name;
     const version = manifest.version;
@@ -1638,9 +2040,9 @@ function runPublicCopy(root, config) {
       });
     }
   }
-  if (config.guides !== false)
+  if (on("guides") && config.guides !== false)
     findings.push(...checkGuides(root, { required: config.guides === "required" }));
-  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles])].sort();
+  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles, ...cliFiles, ...menuFiles])].sort();
   return { findings: sortFindings(findings), files };
 }
 function sortFindings(findings) {
@@ -1649,22 +2051,38 @@ function sortFindings(findings) {
   return [...findings].sort((a, b) => fileOf(a.location).localeCompare(fileOf(b.location)) || lineOf2(a.location) - lineOf2(b.location) || a.location.localeCompare(b.location) || a.rule.localeCompare(b.rule) || a.excerpt.localeCompare(b.excerpt));
 }
 function loadCopyConfig(root, configPath = DEFAULT_CONFIG_FILE) {
-  const path = resolve(root, configPath);
-  if (!existsSync(path))
+  const path = resolve2(root, configPath);
+  if (!existsSync2(path))
     throw new Error(`No ${relative(root, path) || configPath} in ${root}.`);
-  return parseCopyConfig(JSON.parse(readFileSync(path, "utf8")));
+  return parseCopyConfig(JSON.parse(readFileSync2(path, "utf8")));
 }
 function baselinePath(root, config) {
-  return resolve(root, config.baseline ?? DEFAULT_BASELINE_FILE);
+  return resolve2(root, config.baseline ?? DEFAULT_BASELINE_FILE);
 }
 function readBaseline(root, config) {
   const path = baselinePath(root, config);
-  if (!existsSync(path))
+  if (!existsSync2(path))
     return;
-  return parseBaseline(JSON.parse(readFileSync(path, "utf8"))).counts;
+  return parseBaseline(JSON.parse(readFileSync2(path, "utf8"))).counts;
 }
 function writeBaseline(root, config, counts) {
   writeFileSync(baselinePath(root, config), serializeBaseline(counts));
+}
+// src/public-copy/annotations.ts
+function escapeData(value) {
+  return value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll(`
+`, "%0A");
+}
+function escapeProperty(value) {
+  return escapeData(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
+}
+function annotation(finding, advisory) {
+  const level = advisory || finding.severity !== "error" ? "warning" : "error";
+  const file2 = stripLocationSuffix(finding.location);
+  const line = /:(\d+)$/.exec(finding.location)?.[1];
+  const where = finding.location.includes("#") ? ` (${finding.location.slice(finding.location.indexOf("#") + 1)})` : "";
+  const props = [`file=${escapeProperty(file2)}`, ...line ? [`line=${line}`] : [], `title=${escapeProperty(`copy lint: ${finding.rule}`)}`];
+  return `::${level} ${props.join(",")}::${escapeData(`${finding.excerpt}${where} \xB7 ${finding.hint}`)}`;
 }
 // src/public-copy/expect.ts
 class CopyAssertionError extends Error {
@@ -1733,6 +2151,7 @@ export {
   writeBaseline,
   tableCells,
   serializeBaseline,
+  sentenceCaseBreak,
   selectJsonPath,
   runPublicCopy,
   readGuideStamp,
@@ -1740,13 +2159,18 @@ export {
   parseCopyConfig,
   parseBaseline,
   normalizeCounts,
+  menuFindings,
   lowerBaseline,
   loadCopyConfig,
+  lintMenuFixtures,
   lintMarkdown,
   lintCopy,
+  lintCliHelp,
   inlineText,
+  helpLines,
   guideCanonicalHash,
   findInstallPins,
+  findCompanionCli,
   fileOfLocation,
   extractMarkdown,
   extractHtml,
@@ -1762,14 +2186,21 @@ export {
   checkInstallPins,
   checkGuides,
   checkGuideText,
+  annotation,
   SYNCED_GUIDES,
   SELF_CERTIFICATION,
   RETIRED_NAMES,
   PUBLIC_COPY_RULES_VERSION,
   PRECISION_WORDS,
   INTERNAL_VOCABULARY,
+  DESKTOP_FOUNDATION_PACKAGE,
   DEFAULT_CONFIG_FILE,
   DEFAULT_BASELINE_FILE,
   CopyAssertionError,
-  COPY_SURFACES
+  COPY_SURFACES,
+  COPY_SECTIONS,
+  CLI_PROPER_NOUNS,
+  CLI_JARGON,
+  CLI_HELP_KINDS,
+  CLI_HELP_BUDGETS
 };

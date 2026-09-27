@@ -59,7 +59,7 @@ Warnings are printed but never fail the run and never enter the baseline.
 | 1 | An error count rose, or there is no baseline and the run found errors |
 | 2 | The options, the config file, or the baseline file are invalid, or a file the config names is missing or invalid |
 
-Other options: `--root <dir>`, `--config <file>`, `--json` for machine-readable output, and `--quiet` to print only errors.
+Other options: `--root <dir>`, `--config <file>`, `--json` for machine-readable output, `--quiet` to print only errors, `--only <sections>` to check some sections of the config (such as `--only cli,menus`), `--advisory` to report findings without failing, `--annotations` to print GitHub Actions annotations, and `--menu-kit <dir>` to name the installed `@hraness/desktop-foundation` package the menu checks use.
 
 ### Configuration
 
@@ -79,6 +79,9 @@ Every field is optional, and an unknown field is an error.
 | `baseline` | Path to the baseline file. The default is `.public-copy-baseline.json`. |
 | `exclude` | Globs to skip. `node_modules` and `.git` are always skipped. |
 | `guides` | `true` (default) checks the synced guides when they exist, `"required"` also fails when they are missing, and `false` skips the check. |
+| `cli` | Captured CLI output: `[{ "files": "test/golden/bare.txt", "kind": "bare" }]`. `kind` is `bare` (the command run with no arguments), `help` (root `--help`), or `command` (one command's `--help`). `files` is a file or a glob. |
+| `menus` | Menu snapshot fixtures: `{ "fixtures": ["test/menus/*.json"] }`, one v2 snapshot per state. `companion` optionally names the `@hraness/desktop-foundation` package directory; by default the lint uses the one the repository installs. |
+| `properNouns` | Names that CLI help and menus may capitalize mid-sentence, such as `Mom` in a fixture. |
 
 ### Rules
 
@@ -94,8 +97,30 @@ Every field is optional, and an unknown field is an error.
 | `render` | A count of one with a plural noun, as in `1 checks` | Warning |
 | `generated` | In model-written text only: a last sentence about what something signals or underscores, narration about fetches and blocked pages, relative dates such as “today”, and quote glosses such as “stating the governing claim” | Error |
 | `guides` | Synced `STYLE.md` and `WRITING.md` whose shared text no longer matches the SHA-256 stamped by `sync_guides.py`. Edit shared rules in hraness/.github; put local rules under “Repository additions”. | Error |
+| `cli-budget` | A bare invocation over 25 lines or 80 columns, root help over 60 lines, or help lines over 100 columns | Error for the bare invocation and root help line count; warning for help columns and long command help |
+| `cli-case` | A capitalized word in the middle of a help heading or command summary, such as `Getting Started` or `Turn On replies`. Names in `properNouns`, the brand, macOS and app names, key names, mixed-case names, capitals, commands, flags, quotes, and placeholders pass. | Error |
+| `cli-jargon` | Internal words in help text (`admission`, `qualification`, `custody`, `receipt`, `lane`, `gate`, `surface`, `projection`, `habitat`, `organism`, and `vocabulary.add`) unless the same line explains them, as in `lane (the queue a chat waits in)` | Error; warning for `pin` and the other internal words |
+| `menu` | A finding from desktop-foundation's `companion lint-menu --strict`: more than 10 top-level rows, a missing or second primary action, Quit not last, title case, paths, IDs or commands in labels, and the other menu rules. An invalid snapshot is also an error. | Error |
 
 The word lists ship with the package, so a new entry reaches every repository on its next version bump.
+
+### Lint CLI help and menus
+
+Products with a command line or a menu bar add their captured output and menu fixtures to the same config. The rules come from the CLI and menu bar style guide (`CLI_MENU_STYLE.md` in hraness/.github).
+
+```json
+{
+  "cli": [
+    { "files": "test/golden/bare.txt", "kind": "bare" },
+    { "files": "test/golden/help.txt", "kind": "help" },
+    { "files": "test/golden/*.help.txt", "kind": "command" }
+  ],
+  "menus": { "fixtures": ["test/menus/*.json"] },
+  "properNouns": ["Mom"]
+}
+```
+
+The menu checks run desktop-foundation's own `companion lint-menu --strict`, so a product is checked by the same rules its menu ships with. They need `@hraness/desktop-foundation` 0.8.0 or later installed, or `--menu-kit <dir>`.
 
 ### Use it from code and tests
 

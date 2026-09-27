@@ -10,7 +10,7 @@ import type {
 import { splitTitle } from "./scanners.js";
 
 /** Bump when a rule or list changes, so a pin bump names the lint version it brings. */
-export const PUBLIC_COPY_RULES_VERSION = "hraness-public-copy/v0";
+export const PUBLIC_COPY_RULES_VERSION = "hraness-public-copy/v1";
 
 /**
  * Internal vocabulary from the canonical STYLE.md section "Write for the reader, not the build".

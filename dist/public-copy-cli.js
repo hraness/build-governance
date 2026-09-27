@@ -2,7 +2,7 @@
 // @bun
 
 // src/public-copy-cli.ts
-import { resolve as resolve2 } from "path";
+import { resolve as resolve3 } from "path";
 
 // src/public-copy/baseline.ts
 function fileOfLocation(location) {
@@ -112,7 +112,8 @@ var COPY_SURFACES = [
 // src/public-copy/config.ts
 var DEFAULT_CONFIG_FILE = "public-copy.config.json";
 var DEFAULT_BASELINE_FILE = ".public-copy-baseline.json";
-var KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides"]);
+var KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides", "cli", "menus", "properNouns"]);
+var CLI_KINDS = new Set(["bare", "help", "command"]);
 function object(value, label) {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new Error(`${label} must be an object.`);
@@ -176,6 +177,33 @@ function parseCopyConfig(value) {
       ...vocabulary.allowWithDefinition === undefined ? {} : { allowWithDefinition: strings(vocabulary.allowWithDefinition, "vocabulary.allowWithDefinition") }
     };
   }
+  if (raw.cli !== undefined) {
+    if (!Array.isArray(raw.cli))
+      throw new Error("cli must be an array.");
+    config.cli = raw.cli.map((entry, index) => {
+      const item = object(entry, `cli[${index}]`);
+      for (const key of Object.keys(item)) {
+        if (key !== "files" && key !== "kind")
+          throw new Error(`Unknown cli[${index}] key \u201C${key}\u201D.`);
+      }
+      if (typeof item.kind !== "string" || !CLI_KINDS.has(item.kind))
+        throw new Error(`cli[${index}].kind must be one of bare, help, command.`);
+      return { files: file(item.files, `cli[${index}].files`), kind: item.kind };
+    });
+  }
+  if (raw.menus !== undefined) {
+    const menus = object(raw.menus, "menus");
+    for (const key of Object.keys(menus)) {
+      if (key !== "fixtures" && key !== "companion")
+        throw new Error(`Unknown menus key \u201C${key}\u201D.`);
+    }
+    config.menus = {
+      fixtures: strings(menus.fixtures, "menus.fixtures"),
+      ...menus.companion === undefined ? {} : { companion: file(menus.companion, "menus.companion") }
+    };
+  }
+  if (raw.properNouns !== undefined)
+    config.properNouns = strings(raw.properNouns, "properNouns");
   if (raw.brand !== undefined)
     config.brand = file(raw.brand, "brand");
   if (raw.package !== undefined)
@@ -191,56 +219,8 @@ function parseCopyConfig(value) {
 }
 
 // src/public-copy/files.ts
-import { existsSync, readFileSync, writeFileSync } from "fs";
-import { join, relative, resolve } from "path";
-
-// src/public-copy/guides.ts
-import { createHash } from "crypto";
-var SYNCED_GUIDES = ["STYLE.md", "WRITING.md"];
-var REPOSITORY_ADDITIONS_HEADING = "## Repository additions";
-var STAMP = /\n\n<!-- synced from hraness\/\.github (\S+) sha256:([0-9a-f]{64}) -->\n/;
-function readGuideStamp(text) {
-  const match = STAMP.exec(text.replace(/\r\n?/g, `
-`));
-  return match?.[1] && match[2] ? { name: match[1], sha256: match[2] } : undefined;
-}
-function guideCanonicalHash(text) {
-  const normalized = text.replace(/\r\n?/g, `
-`);
-  const additions = normalized.indexOf(`
-${REPOSITORY_ADDITIONS_HEADING}`);
-  const above = (additions === -1 ? normalized : normalized.slice(0, additions)).replace(/\s+$/, "") + `
-`;
-  if (!STAMP.test(above))
-    return;
-  const body = above.replace(STAMP, `
-`);
-  return createHash("sha256").update(body, "utf8").digest("hex");
-}
-function checkGuideText(name, text, location = name) {
-  const finding = (hint, excerpt) => ({
-    rule: "guides",
-    severity: "error",
-    surface: "reference",
-    location,
-    excerpt,
-    hint
-  });
-  const stamp = readGuideStamp(text);
-  if (!stamp) {
-    return [finding(`${name} has no sync stamp. Run sync_guides.py from hraness/.github to replace it with the canonical copy.`, text.split(`
-`, 1)[0] ?? "")];
-  }
-  const findings = [];
-  if (stamp.name !== name) {
-    findings.push(finding(`The stamp names ${stamp.name}, but this file is ${name}.`, `sha256:${stamp.sha256}`));
-  }
-  const actual = guideCanonicalHash(text);
-  if (actual !== stamp.sha256) {
-    findings.push(finding(`The shared text in ${name} was edited after the sync (sha256 ${actual?.slice(0, 12) ?? "missing"}, stamp ${stamp.sha256.slice(0, 12)}). ` + `Change shared rules in hraness/.github and resync; put local rules under \u201CRepository additions\u201D.`, `sha256:${stamp.sha256}`));
-  }
-  return findings;
-}
+import { existsSync as existsSync2, readFileSync as readFileSync2, writeFileSync } from "fs";
+import { join as join2, relative, resolve as resolve2 } from "path";
 
 // src/public-copy/scanners.ts
 var SLASH = 47;
@@ -580,6 +560,614 @@ function htmlTokenizer(html) {
   return { next };
 }
 
+// src/public-copy/rules.ts
+var PUBLIC_COPY_RULES_VERSION = "hraness-public-copy/v1";
+var INTERNAL_VOCABULARY = [
+  "admission",
+  "admitted",
+  "qualification",
+  "qualified",
+  "custody",
+  "settlement",
+  "settled",
+  "receipt",
+  "attest",
+  "attested",
+  "evidence-backed",
+  "provenance",
+  "bounded",
+  "boundary",
+  "typed",
+  "contract",
+  "fenced",
+  "lease",
+  "manifest",
+  "promoted",
+  "gate",
+  "lane",
+  "workstream",
+  "surface",
+  "projection",
+  "foundation",
+  "substrate",
+  "authority",
+  "inert",
+  "canonical",
+  "retained",
+  "source pilot",
+  "source-bound",
+  "steel thread"
+];
+var PRECISION_WORDS = [
+  "exact",
+  "explicit",
+  "full",
+  "complete",
+  "retained",
+  "independently"
+];
+var SELF_CERTIFICATION = [
+  "honest",
+  "honestly",
+  "honesty",
+  "said plainly",
+  "factual proof",
+  "checked product"
+];
+var RETIRED_NAMES = [
+  { pattern: /(?<![\w.-])atet(?![\w-])/gi, hint: "Atet is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
+  { pattern: /(?<![\w.-])message[ -]like[ -]me(?![\w-])/gi, hint: "Message Like Me is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
+  { pattern: /(?<![\w.-])life ?days ?left(?![\w-])/gi, hint: "Life Days Left is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
+  { pattern: /(?<![\w.-])platonik(?![\w-])/gi, hint: "Platonik is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
+  { pattern: /(?<![\w./-])hra\.sh(?![\w-])/gi, hint: "hra.sh is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
+  { pattern: /(?<![\w-])Oompa(?![\w-])/g, hint: "Oompa is a retired product name. Name what the reader uses today." },
+  { pattern: /(?<![\w-])Wrench(?![\w-])/g, hint: "Wrench is a retired product name. Name what the reader uses today." },
+  { pattern: /(?<![\w-])Aicharts(?![\w-])/g, hint: "Write \u201CAI Charts\u201D, as the portfolio registry spells it." },
+  { pattern: /(?<![\w-])TextButler(?![\w-])/g, hint: "Write \u201CTextbutler\u201D, as the portfolio registry spells it." },
+  { pattern: /(?<![\w-])XCB(?![\w-])/g, hint: "Write \u201Cxcb\u201D, as the portfolio registry spells it." },
+  { pattern: /(?<![\w-])Sound\.fish(?![\w-])/g, hint: "The product is Soundfish. Write sound.fish only for the web address." }
+];
+var SIGNIFICANCE_CLOSER = /\b(?:signals|underscores|highlights|reflects|represents|marks)\b|\braises questions\b/gi;
+var PROCESS_WORDS = /\b403\b|\bCloudflare\b|\bat clip time\b|\bthis digest\b|\bcandidate pool\b|\bsupplied evidence\b|\bshould not be selected\b|\bfetched for this draft\b/gi;
+var RELATIVE_DATES = /\b(?:today|yesterday|this week)\b/gi;
+var GOVERNING_CLAIM = /\bgoverning claim\b/gi;
+var TIGHT_SURFACES = new Set(["title", "description", "social", "alt", "heading"]);
+var METADATA_SURFACES = new Set(["title", "description", "social", "alt"]);
+var SINGULAR_S = new Set([
+  "series",
+  "news",
+  "species",
+  "yes",
+  "gas",
+  "lens",
+  "always",
+  "perhaps",
+  "its",
+  "has",
+  "was",
+  "does",
+  "as",
+  "canvas",
+  "alias",
+  "atlas",
+  "whereas",
+  "sometimes",
+  "hers",
+  "ours",
+  "yours",
+  "theirs"
+]);
+var ORDINAL_LABEL = /\b(?:rank|step|phase|level|tier|version|chapter|part|wave|day|week|stage|option|page|section|figure|table|round|slot|item|no\.)\s+$/i;
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function termPattern(term) {
+  const words = term.trim().toLowerCase().split(/\s+/).map(escapeRegExp);
+  const last = words.pop() ?? "";
+  const plural = last.endsWith("y") ? `${last.slice(0, -1)}(?:y|ies)` : `${last}(?:s|es)?`;
+  return `(?<![\\w-])${[...words, plural].join("\\s+")}(?![\\w-])`;
+}
+var termRegexCache = new Map;
+function termRegex(term) {
+  let regex = termRegexCache.get(term);
+  if (!regex) {
+    regex = new RegExp(termPattern(term), "gi");
+    termRegexCache.set(term, regex);
+  }
+  regex.lastIndex = 0;
+  return regex;
+}
+function definedTerms(pageText, terms) {
+  const found = new Set;
+  for (const term of terms) {
+    const definition = new RegExp(`${termPattern(term)}\\s*(?:\\*\\*|\\*|_|\u201D|"|\`)?\\s*(?::|\\(|\\bis\\b|\\bare\\b|\\bmeans\\b|\\brefers to\\b)`, "i");
+    if (definition.test(pageText))
+      found.add(term.toLowerCase());
+  }
+  return found;
+}
+function vocabularyFor(config) {
+  const added = config?.vocabulary?.add ?? [];
+  return [...new Set([...INTERNAL_VOCABULARY, ...added.map((term) => term.toLowerCase())])];
+}
+function excerptAt(text, index, length) {
+  const start = Math.max(0, index - 30);
+  const end = Math.min(text.length, index + length + 30);
+  const body = text.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "\u2026" : ""}${body}${end < text.length ? "\u2026" : ""}`;
+}
+function maskUrls(text) {
+  return text.replace(/\bhttps?:\/\/[^\s)>\]]+|\bwww\.[^\s)>\]]+/g, (match) => " ".repeat(match.length));
+}
+function sentenceSpans(text) {
+  const spans = [];
+  const boundary = /[.!?]["\u201D\u2019)]*\s+/g;
+  let start = 0;
+  for (const match of text.matchAll(boundary)) {
+    const end = match.index + match[0].length;
+    if (text.slice(start, end).trim())
+      spans.push({ start, end });
+    start = end;
+  }
+  if (text.slice(start).trim())
+    spans.push({ start, end: text.length });
+  return spans;
+}
+function isAfterFormerly(text, index) {
+  const before = text.slice(Math.max(0, index - 60), index);
+  const sentence = before.split(/[.!?]\s/).pop() ?? "";
+  return /\bformerly\b/i.test(sentence);
+}
+function codePointLength(text) {
+  return [...text].length;
+}
+function titleSegments(title) {
+  return splitTitle(title).map((part) => part.trim().toLowerCase()).filter(Boolean);
+}
+function lintCopy(text, opts) {
+  const findings = [];
+  const { surface: surface2, location } = opts;
+  const format = opts.format ?? "text";
+  const add = (rule, severity, index, length, hint, source = text) => {
+    findings.push({ rule, severity, surface: surface2, location, excerpt: excerptAt(source, index, length), hint });
+  };
+  const masked = maskUrls(text);
+  for (const match of masked.matchAll(/\u2014/g)) {
+    add("emdash", "error", match.index, 1, "Rewrite the sentence without an em dash. Do not substitute a spaced hyphen.");
+  }
+  for (const match of masked.matchAll(/ \u2013 | -- /g)) {
+    add("emdash", "error", match.index, match[0].length, "A spaced en dash or double hyphen stands in for an em dash. Rewrite the sentence.");
+  }
+  const allowWithDefinition = new Set((opts.config?.vocabulary?.allowWithDefinition ?? []).map((term) => term.toLowerCase()));
+  const defined = opts.definedTerms ?? new Set;
+  for (const term of vocabularyFor(opts.config)) {
+    let severity;
+    if (TIGHT_SURFACES.has(surface2))
+      severity = "error";
+    else if (surface2 === "reference")
+      severity = defined.has(term) ? undefined : "warn";
+    else
+      severity = allowWithDefinition.has(term) && defined.has(term) ? undefined : "warn";
+    if (!severity)
+      continue;
+    for (const match of masked.matchAll(termRegex(term))) {
+      add("vocab", severity, match.index, match[0].length, `\u201C${match[0]}\u201D is internal vocabulary. Say what the reader gets, or define the term where it first appears.`);
+    }
+  }
+  const precision = new RegExp(`\\b(?:${PRECISION_WORDS.join("|")})\\b`, "gi");
+  for (const span of sentenceSpans(masked)) {
+    const sentence = masked.slice(span.start, span.end);
+    const words = [...sentence.matchAll(precision)];
+    const distinct = new Set(words.map((word) => word[0].toLowerCase()));
+    if (distinct.size >= 2 && words[0]) {
+      const severity = TIGHT_SURFACES.has(surface2) ? "error" : "warn";
+      add("vocab", severity, span.start + words[0].index, sentence.length - words[0].index, `Precision stack (${[...distinct].join(", ")}). Keep a precision word only where it changes the meaning.`);
+    }
+  }
+  const selfcert = new RegExp(`\\b(?:${SELF_CERTIFICATION.map(escapeRegExp).map((term) => term.replace(/ /g, "\\s+")).join("|")})\\b`, "gi");
+  for (const match of masked.matchAll(selfcert)) {
+    add("selfcert", "error", match.index, match[0].length, "Do not call the page, product, or caveat honest, plain, factual, or checked. Show the evidence.");
+  }
+  for (const { pattern, hint } of RETIRED_NAMES) {
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
+      if (isAfterFormerly(text, match.index))
+        continue;
+      add("retired", "error", match.index, match[0].length, hint);
+    }
+  }
+  const field = opts.field;
+  const trimmed = text.trim();
+  const isDescription = field === "description" || surface2 === "description" && field === undefined;
+  const isTitle = field === "title" || surface2 === "title" && field === undefined;
+  const isAlt = field === "alt" || surface2 === "alt" && field === undefined;
+  if (isDescription && trimmed) {
+    const length = codePointLength(trimmed);
+    if (length < 70 || length > 160) {
+      add("meta", "error", 0, trimmed.length, `Description is ${length} characters. Write one or two complete sentences of 70 to 160 characters.`, trimmed);
+    }
+    if (/(?:\u2026|\.\.\.)$/.test(trimmed)) {
+      add("meta", "error", trimmed.length - 3, 3, "Description ends in an ellipsis. Write a complete sentence that fits instead of truncating.", trimmed);
+    } else if (!/[.!?)"\u201D\u2019']$/.test(trimmed)) {
+      add("meta", "error", Math.max(0, trimmed.length - 20), 20, "Description stops mid-sentence. End it with a complete sentence.", trimmed);
+    }
+  }
+  if (isTitle && trimmed) {
+    const length = codePointLength(trimmed);
+    if (length > 65)
+      add("meta", "error", 0, trimmed.length, `Title is ${length} characters. Keep it to 65 or fewer.`, trimmed);
+    const brand = opts.config?.brand?.trim();
+    const brandCount = brand ? [...trimmed.matchAll(new RegExp(`(?<![\\w-])${escapeRegExp(brand)}(?![\\w-])`, "gi"))].length : 0;
+    const segments = titleSegments(trimmed);
+    if (brandCount > 1 || new Set(segments).size < segments.length) {
+      add("meta", "error", 0, trimmed.length, "The title repeats a name. Name the brand once.", trimmed);
+    }
+  }
+  if (isAlt && trimmed) {
+    const length = codePointLength(trimmed);
+    if (length > 125)
+      add("meta", "error", 0, trimmed.length, `Alt text is ${length} characters. Describe the image in 125 or fewer.`, trimmed);
+    if (/^(?:an?\s+)?(?:image|picture|photo|screenshot)\s+of\b/i.test(trimmed)) {
+      add("meta", "error", 0, 12, "Describe what the image shows. Do not start with \u201CImage of\u201D.", trimmed);
+    }
+    if (/\s[\u2014\u2013|]\s|\s-\s/.test(trimmed)) {
+      add("meta", "error", 0, trimmed.length, "Alt text reads as a title and tagline. Describe what the image shows.", trimmed);
+    }
+  }
+  if (format === "html" || METADATA_SURFACES.has(surface2)) {
+    for (const match of text.matchAll(/`|\*\*/g)) {
+      add("render", "error", match.index, match[0].length, "Markdown syntax renders literally here. Use markup, or write the command in prose.");
+    }
+  }
+  if (format !== "markdown") {
+    for (const match of text.matchAll(/&(?:apos|quot|amp|lt|gt|#39|#x27);/g)) {
+      add("render", "error", match.index, match[0].length, "An HTML entity renders literally. Escape it once.");
+    }
+  }
+  for (const match of masked.matchAll(/[a-z]\.[A-Z][a-z]/g)) {
+    add("render", "error", match.index, match[0].length, "Two sentences are glued together. Add a space after the period.");
+  }
+  for (const match of masked.matchAll(/(?<![\w.,#-])1 ([a-z]+s)\b/g)) {
+    const noun = match[1] ?? "";
+    if (SINGULAR_S.has(noun) || /(?:ss|us|is|ics)$/.test(noun))
+      continue;
+    if (ORDINAL_LABEL.test(masked.slice(Math.max(0, match.index - 12), match.index)))
+      continue;
+    add("render", "warn", match.index, match[0].length, "The count does not agree with its noun. Test zero, one, and several.");
+  }
+  if (surface2 === "generated") {
+    const spans = sentenceSpans(masked);
+    const last = spans[spans.length - 1];
+    if (last) {
+      const sentence = masked.slice(last.start, last.end);
+      for (const match of sentence.matchAll(SIGNIFICANCE_CLOSER)) {
+        add("generated", "error", last.start + match.index, match[0].length, "The text ends on a significance claim. End on the last supported fact.");
+      }
+    }
+    for (const match of masked.matchAll(PROCESS_WORDS)) {
+      add("generated", "error", match.index, match[0].length, "Do not describe how the text was made or what was fetched.");
+    }
+    for (const match of masked.matchAll(RELATIVE_DATES)) {
+      add("generated", "error", match.index, match[0].length, "Write dates as dates in text that stays published.");
+    }
+    for (const match of masked.matchAll(GOVERNING_CLAIM)) {
+      add("generated", "error", match.index, match[0].length, "Name the speaker and role without paraphrasing the quote in the attribution.");
+    }
+  }
+  return findings;
+}
+
+// src/public-copy/cli-help.ts
+var CLI_HELP_KINDS = ["bare", "help", "command"];
+var CLI_HELP_BUDGETS = {
+  bare: { lines: 25, linesSeverity: "error", columns: 80, columnsSeverity: "error" },
+  help: { lines: 60, linesSeverity: "error", columns: 100, columnsSeverity: "warn" },
+  command: { lines: 60, linesSeverity: "warn", columns: 100, columnsSeverity: "warn" }
+};
+var CLI_JARGON = [
+  "admission",
+  "admitted",
+  "qualification",
+  "qualified",
+  "custody",
+  "receipt",
+  "lane",
+  "gate",
+  "surface",
+  "projection",
+  "habitat",
+  "organism"
+];
+var CLI_JARGON_WARN_ONLY = ["pin"];
+var CLI_PROPER_NOUNS = [
+  "Mac",
+  "Messages",
+  "Chrome",
+  "Safari",
+  "Firefox",
+  "Edge",
+  "Brave",
+  "Arc",
+  "Finder",
+  "System Settings",
+  "Keychain Access",
+  "Privacy & Security",
+  "Full Disk Access",
+  "Automation",
+  "Contacts",
+  "Accessibility",
+  "Screen & System Audio Recording",
+  "Camera",
+  "Microphone",
+  "Local Network",
+  "Firewall",
+  "Notifications",
+  "Login Items & Extensions",
+  "Login Items",
+  "Settings",
+  "Enter",
+  "Return",
+  "Escape",
+  "Option",
+  "Command",
+  "Control",
+  "Shift",
+  "Always Allow",
+  "Allow",
+  "Don't Allow",
+  "Apple",
+  "Apple Intelligence",
+  "Xcode",
+  "Terminal",
+  "Ghostty",
+  "Zed",
+  "Warp",
+  "WezTerm",
+  "Visual Studio Code",
+  "Windows",
+  "Linux",
+  "Homebrew",
+  "Bun",
+  "Node",
+  "Deno",
+  "Rust",
+  "Swift",
+  "Python",
+  "Markdown",
+  "Git",
+  "Google",
+  "Slack",
+  "Stripe",
+  "Vercel",
+  "Cloudflare",
+  "Claude",
+  "Claude Code",
+  "Codex",
+  "Devin",
+  "Cursor",
+  "Gemini",
+  "OpenAI",
+  "Anthropic",
+  "Ollama",
+  "Hraness",
+  "Textbutler",
+  "Ghostget",
+  "Wordcell",
+  "Sponge",
+  "PeopleBlade",
+  "AI Charts",
+  "Slopcamera",
+  "Valhalla",
+  "Soundfish",
+  "Gobstopper",
+  "Morphogen",
+  "Lifecharts",
+  "System One",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+  "English"
+];
+var ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+function escapeRegExp2(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function columns(line) {
+  return [...line].length;
+}
+function helpLines(text) {
+  const lines = text.replace(ANSI, "").replace(/\r\n?/g, `
+`).split(`
+`);
+  while (lines.length && !lines[lines.length - 1].trim())
+    lines.pop();
+  return lines;
+}
+function literalSpans(text) {
+  const spans = [];
+  const patterns = [
+    /`[^`]*`/g,
+    /"[^"]*"/g,
+    /\u201C[^\u201D]*\u201D/g,
+    /'[^'\s][^']*'/g,
+    /<[^>]*>/g,
+    /\[[^\]]*\]/g,
+    /\{[^}]*\}/g,
+    /(?<!\S)--?[A-Za-z][\w-]*(?:[= ]<[^>]*>)?/g,
+    /\S*[/\\~@]\S*/g,
+    /\S+\.\S+/g
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern))
+      spans.push([match.index, match.index + match[0].length]);
+  }
+  return spans;
+}
+function sentenceCaseBreak(text, nouns) {
+  const exempt = literalSpans(text);
+  for (const noun of nouns) {
+    for (const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp2(noun)}(?![\\p{L}\\p{N}])`, "gu"))) {
+      exempt.push([match.index, match.index + noun.length]);
+    }
+  }
+  for (const match of text.matchAll(/\S+/g)) {
+    const before = text.slice(0, match.index);
+    if (!before.trim() || /(?:[.!?:\u00B7|\u2022]|\s[-\u2013]|\()\s*$/.test(before))
+      continue;
+    const lead = match[0].search(/[\p{L}\p{N}]/u);
+    if (lead === -1)
+      continue;
+    const start = match.index + lead;
+    if (exempt.some(([from, to]) => start >= from && start < to))
+      continue;
+    const bare = match[0].replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (!/^\p{Lu}\p{Ll}+(?:'\p{Ll}+)?$/u.test(bare))
+      continue;
+    return { word: bare, index: start };
+  }
+  return;
+}
+function proseOf(line, index) {
+  if (!line.trim())
+    return;
+  const indent = /^\s*/.exec(line)[0].length;
+  if (indent === 0) {
+    if (/^usage:/i.test(line))
+      return;
+    const gap2 = /\S( {2,}|\t)\S/.exec(line);
+    if (gap2)
+      return { text: line.slice(gap2.index + 1 + gap2[1].length), offset: gap2.index + 1 + gap2[1].length, role: "summary" };
+    return { text: line, offset: 0, role: index === 0 ? "prose" : "heading" };
+  }
+  const gap = /\S( {2,}|\t)(?=\S)/.exec(line.slice(indent));
+  if (gap) {
+    const offset = indent + gap.index + 1 + gap[1].length;
+    return { text: line.slice(offset), offset, role: "summary" };
+  }
+  const trimmed = line.trim();
+  if (/^[$>#]/.test(trimmed) || /^[a-z0-9][\w.-]*(\s|$)/.test(trimmed) && !/[.!?]$/.test(trimmed))
+    return;
+  return { text: trimmed, offset: indent, role: "prose" };
+}
+function glossed(line, term) {
+  if (definedTerms(line, [term]).size)
+    return true;
+  return new RegExp(`\\((?:an?\\s+|the\\s+)?${termPattern(term)}\\)`, "i").test(line);
+}
+function lintCliHelp(text, options) {
+  const findings = [];
+  const { kind, location, config } = options;
+  const lines = helpLines(text);
+  const budget = CLI_HELP_BUDGETS[kind];
+  const add = (rule, severity, line, excerpt, hint) => {
+    findings.push({ rule, severity, surface: "body", location: `${location}:${line}`, excerpt, hint });
+  };
+  if (lines.length > budget.lines) {
+    const what = kind === "bare" ? "A bare invocation" : kind === "help" ? "Root help" : "Command help";
+    add("cli-budget", budget.linesSeverity, budget.lines + 1, `${lines.length} lines`, `${what} prints ${lines.length} lines. Keep it to ${budget.lines}${kind === "help" ? "; move advanced verbs to `help advanced`" : kind === "bare" ? ": a one-line description, 3 to 5 starter commands, and the help pointer" : ""}.`);
+  }
+  lines.forEach((line, index) => {
+    const width = columns(line);
+    if (width > budget.columns) {
+      add("cli-budget", budget.columnsSeverity, index + 1, excerptAt(line, budget.columns - 20, 20), `Line is ${width} columns. Keep ${kind === "bare" ? "a bare invocation" : "help"} to ${budget.columns}; wrap the summary or shorten it.`);
+    }
+  });
+  const nouns = [...new Set([...CLI_PROPER_NOUNS, ...config?.properNouns ?? [], ...options.properNouns ?? [], ...config?.brand ? [config.brand] : []])].sort((a, b) => b.length - a.length);
+  const added = (config?.vocabulary?.add ?? []).map((term) => term.toLowerCase());
+  const errorTerms = [...new Set([...CLI_JARGON, ...added])];
+  const warnTerms = [...new Set([...CLI_JARGON_WARN_ONLY, ...INTERNAL_VOCABULARY.map((term) => term.toLowerCase())])].filter((term) => !errorTerms.includes(term));
+  lines.forEach((line, index) => {
+    const prose = proseOf(line, index);
+    const lineNo = index + 1;
+    if (prose) {
+      const broken = sentenceCaseBreak(prose.text, nouns);
+      if (broken) {
+        add("cli-case", "error", lineNo, excerptAt(prose.text, broken.index, broken.word.length), `\u201C${broken.word}\u201D is capitalized mid-sentence. Use sentence case, or add the name to properNouns.`);
+      }
+    }
+    for (const [terms, severity] of [[errorTerms, "error"], [warnTerms, "warn"]]) {
+      for (const term of terms) {
+        for (const match of line.matchAll(new RegExp(termPattern(term), "gi"))) {
+          if (glossed(line, term))
+            continue;
+          add("cli-jargon", severity, lineNo, excerptAt(line, match.index, match[0].length), `\u201C${match[0]}\u201D is internal vocabulary. Say what the person gets, or gloss it on the same line, as in \u201C${match[0]} (what it means)\u201D.`);
+        }
+      }
+    }
+    if (prose) {
+      for (const finding of lintCopy(prose.text, { surface: "body", location: `${location}:${lineNo}`, ...config ? { config } : {} })) {
+        if (finding.rule === "emdash" || finding.rule === "selfcert" || finding.rule === "retired")
+          findings.push(finding);
+      }
+    }
+  });
+  return findings;
+}
+
+// src/public-copy/guides.ts
+import { createHash } from "crypto";
+var SYNCED_GUIDES = ["STYLE.md", "WRITING.md"];
+var REPOSITORY_ADDITIONS_HEADING = "## Repository additions";
+var STAMP = /\n\n<!-- synced from hraness\/\.github (\S+) sha256:([0-9a-f]{64}) -->\n/;
+function readGuideStamp(text) {
+  const match = STAMP.exec(text.replace(/\r\n?/g, `
+`));
+  return match?.[1] && match[2] ? { name: match[1], sha256: match[2] } : undefined;
+}
+function guideCanonicalHash(text) {
+  const normalized = text.replace(/\r\n?/g, `
+`);
+  const additions = normalized.indexOf(`
+${REPOSITORY_ADDITIONS_HEADING}`);
+  const above = (additions === -1 ? normalized : normalized.slice(0, additions)).replace(/\s+$/, "") + `
+`;
+  if (!STAMP.test(above))
+    return;
+  const body = above.replace(STAMP, `
+`);
+  return createHash("sha256").update(body, "utf8").digest("hex");
+}
+function checkGuideText(name, text, location = name) {
+  const finding = (hint, excerpt) => ({
+    rule: "guides",
+    severity: "error",
+    surface: "reference",
+    location,
+    excerpt,
+    hint
+  });
+  const stamp = readGuideStamp(text);
+  if (!stamp) {
+    return [finding(`${name} has no sync stamp. Run sync_guides.py from hraness/.github to replace it with the canonical copy.`, text.split(`
+`, 1)[0] ?? "")];
+  }
+  const findings = [];
+  if (stamp.name !== name) {
+    findings.push(finding(`The stamp names ${stamp.name}, but this file is ${name}.`, `sha256:${stamp.sha256}`));
+  }
+  const actual = guideCanonicalHash(text);
+  if (actual !== stamp.sha256) {
+    findings.push(finding(`The shared text in ${name} was edited after the sync (sha256 ${actual?.slice(0, 12) ?? "missing"}, stamp ${stamp.sha256.slice(0, 12)}). ` + `Change shared rules in hraness/.github and resync; put local rules under \u201CRepository additions\u201D.`, `sha256:${stamp.sha256}`));
+  }
+  return findings;
+}
+
 // src/public-copy/html.ts
 var NAMED_ENTITIES = {
   amp: "&",
@@ -899,303 +1487,6 @@ function selectJsonPath(value, path) {
   return current;
 }
 
-// src/public-copy/rules.ts
-var PUBLIC_COPY_RULES_VERSION = "hraness-public-copy/v0";
-var INTERNAL_VOCABULARY = [
-  "admission",
-  "admitted",
-  "qualification",
-  "qualified",
-  "custody",
-  "settlement",
-  "settled",
-  "receipt",
-  "attest",
-  "attested",
-  "evidence-backed",
-  "provenance",
-  "bounded",
-  "boundary",
-  "typed",
-  "contract",
-  "fenced",
-  "lease",
-  "manifest",
-  "promoted",
-  "gate",
-  "lane",
-  "workstream",
-  "surface",
-  "projection",
-  "foundation",
-  "substrate",
-  "authority",
-  "inert",
-  "canonical",
-  "retained",
-  "source pilot",
-  "source-bound",
-  "steel thread"
-];
-var PRECISION_WORDS = [
-  "exact",
-  "explicit",
-  "full",
-  "complete",
-  "retained",
-  "independently"
-];
-var SELF_CERTIFICATION = [
-  "honest",
-  "honestly",
-  "honesty",
-  "said plainly",
-  "factual proof",
-  "checked product"
-];
-var RETIRED_NAMES = [
-  { pattern: /(?<![\w.-])atet(?![\w-])/gi, hint: "Atet is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
-  { pattern: /(?<![\w.-])message[ -]like[ -]me(?![\w-])/gi, hint: "Message Like Me is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
-  { pattern: /(?<![\w.-])life ?days ?left(?![\w-])/gi, hint: "Life Days Left is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
-  { pattern: /(?<![\w.-])platonik(?![\w-])/gi, hint: "Platonik is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
-  { pattern: /(?<![\w./-])hra\.sh(?![\w-])/gi, hint: "hra.sh is retired. Mention it only in a redirect, a changelog, or a \u201Cformerly\u201D note." },
-  { pattern: /(?<![\w-])Oompa(?![\w-])/g, hint: "Oompa is a retired product name. Name what the reader uses today." },
-  { pattern: /(?<![\w-])Wrench(?![\w-])/g, hint: "Wrench is a retired product name. Name what the reader uses today." },
-  { pattern: /(?<![\w-])Aicharts(?![\w-])/g, hint: "Write \u201CAI Charts\u201D, as the portfolio registry spells it." },
-  { pattern: /(?<![\w-])TextButler(?![\w-])/g, hint: "Write \u201CTextbutler\u201D, as the portfolio registry spells it." },
-  { pattern: /(?<![\w-])XCB(?![\w-])/g, hint: "Write \u201Cxcb\u201D, as the portfolio registry spells it." },
-  { pattern: /(?<![\w-])Sound\.fish(?![\w-])/g, hint: "The product is Soundfish. Write sound.fish only for the web address." }
-];
-var SIGNIFICANCE_CLOSER = /\b(?:signals|underscores|highlights|reflects|represents|marks)\b|\braises questions\b/gi;
-var PROCESS_WORDS = /\b403\b|\bCloudflare\b|\bat clip time\b|\bthis digest\b|\bcandidate pool\b|\bsupplied evidence\b|\bshould not be selected\b|\bfetched for this draft\b/gi;
-var RELATIVE_DATES = /\b(?:today|yesterday|this week)\b/gi;
-var GOVERNING_CLAIM = /\bgoverning claim\b/gi;
-var TIGHT_SURFACES = new Set(["title", "description", "social", "alt", "heading"]);
-var METADATA_SURFACES = new Set(["title", "description", "social", "alt"]);
-var SINGULAR_S = new Set([
-  "series",
-  "news",
-  "species",
-  "yes",
-  "gas",
-  "lens",
-  "always",
-  "perhaps",
-  "its",
-  "has",
-  "was",
-  "does",
-  "as",
-  "canvas",
-  "alias",
-  "atlas",
-  "whereas",
-  "sometimes",
-  "hers",
-  "ours",
-  "yours",
-  "theirs"
-]);
-var ORDINAL_LABEL = /\b(?:rank|step|phase|level|tier|version|chapter|part|wave|day|week|stage|option|page|section|figure|table|round|slot|item|no\.)\s+$/i;
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function termPattern(term) {
-  const words = term.trim().toLowerCase().split(/\s+/).map(escapeRegExp);
-  const last = words.pop() ?? "";
-  const plural = last.endsWith("y") ? `${last.slice(0, -1)}(?:y|ies)` : `${last}(?:s|es)?`;
-  return `(?<![\\w-])${[...words, plural].join("\\s+")}(?![\\w-])`;
-}
-var termRegexCache = new Map;
-function termRegex(term) {
-  let regex = termRegexCache.get(term);
-  if (!regex) {
-    regex = new RegExp(termPattern(term), "gi");
-    termRegexCache.set(term, regex);
-  }
-  regex.lastIndex = 0;
-  return regex;
-}
-function definedTerms(pageText, terms) {
-  const found = new Set;
-  for (const term of terms) {
-    const definition = new RegExp(`${termPattern(term)}\\s*(?:\\*\\*|\\*|_|\u201D|"|\`)?\\s*(?::|\\(|\\bis\\b|\\bare\\b|\\bmeans\\b|\\brefers to\\b)`, "i");
-    if (definition.test(pageText))
-      found.add(term.toLowerCase());
-  }
-  return found;
-}
-function vocabularyFor(config) {
-  const added = config?.vocabulary?.add ?? [];
-  return [...new Set([...INTERNAL_VOCABULARY, ...added.map((term) => term.toLowerCase())])];
-}
-function excerptAt(text, index, length) {
-  const start = Math.max(0, index - 30);
-  const end = Math.min(text.length, index + length + 30);
-  const body = text.slice(start, end).replace(/\s+/g, " ").trim();
-  return `${start > 0 ? "\u2026" : ""}${body}${end < text.length ? "\u2026" : ""}`;
-}
-function maskUrls(text) {
-  return text.replace(/\bhttps?:\/\/[^\s)>\]]+|\bwww\.[^\s)>\]]+/g, (match) => " ".repeat(match.length));
-}
-function sentenceSpans(text) {
-  const spans = [];
-  const boundary = /[.!?]["\u201D\u2019)]*\s+/g;
-  let start = 0;
-  for (const match of text.matchAll(boundary)) {
-    const end = match.index + match[0].length;
-    if (text.slice(start, end).trim())
-      spans.push({ start, end });
-    start = end;
-  }
-  if (text.slice(start).trim())
-    spans.push({ start, end: text.length });
-  return spans;
-}
-function isAfterFormerly(text, index) {
-  const before = text.slice(Math.max(0, index - 60), index);
-  const sentence = before.split(/[.!?]\s/).pop() ?? "";
-  return /\bformerly\b/i.test(sentence);
-}
-function codePointLength(text) {
-  return [...text].length;
-}
-function titleSegments(title) {
-  return splitTitle(title).map((part) => part.trim().toLowerCase()).filter(Boolean);
-}
-function lintCopy(text, opts) {
-  const findings = [];
-  const { surface: surface2, location } = opts;
-  const format = opts.format ?? "text";
-  const add = (rule, severity, index, length, hint, source = text) => {
-    findings.push({ rule, severity, surface: surface2, location, excerpt: excerptAt(source, index, length), hint });
-  };
-  const masked = maskUrls(text);
-  for (const match of masked.matchAll(/\u2014/g)) {
-    add("emdash", "error", match.index, 1, "Rewrite the sentence without an em dash. Do not substitute a spaced hyphen.");
-  }
-  for (const match of masked.matchAll(/ \u2013 | -- /g)) {
-    add("emdash", "error", match.index, match[0].length, "A spaced en dash or double hyphen stands in for an em dash. Rewrite the sentence.");
-  }
-  const allowWithDefinition = new Set((opts.config?.vocabulary?.allowWithDefinition ?? []).map((term) => term.toLowerCase()));
-  const defined = opts.definedTerms ?? new Set;
-  for (const term of vocabularyFor(opts.config)) {
-    let severity;
-    if (TIGHT_SURFACES.has(surface2))
-      severity = "error";
-    else if (surface2 === "reference")
-      severity = defined.has(term) ? undefined : "warn";
-    else
-      severity = allowWithDefinition.has(term) && defined.has(term) ? undefined : "warn";
-    if (!severity)
-      continue;
-    for (const match of masked.matchAll(termRegex(term))) {
-      add("vocab", severity, match.index, match[0].length, `\u201C${match[0]}\u201D is internal vocabulary. Say what the reader gets, or define the term where it first appears.`);
-    }
-  }
-  const precision = new RegExp(`\\b(?:${PRECISION_WORDS.join("|")})\\b`, "gi");
-  for (const span of sentenceSpans(masked)) {
-    const sentence = masked.slice(span.start, span.end);
-    const words = [...sentence.matchAll(precision)];
-    const distinct = new Set(words.map((word) => word[0].toLowerCase()));
-    if (distinct.size >= 2 && words[0]) {
-      const severity = TIGHT_SURFACES.has(surface2) ? "error" : "warn";
-      add("vocab", severity, span.start + words[0].index, sentence.length - words[0].index, `Precision stack (${[...distinct].join(", ")}). Keep a precision word only where it changes the meaning.`);
-    }
-  }
-  const selfcert = new RegExp(`\\b(?:${SELF_CERTIFICATION.map(escapeRegExp).map((term) => term.replace(/ /g, "\\s+")).join("|")})\\b`, "gi");
-  for (const match of masked.matchAll(selfcert)) {
-    add("selfcert", "error", match.index, match[0].length, "Do not call the page, product, or caveat honest, plain, factual, or checked. Show the evidence.");
-  }
-  for (const { pattern, hint } of RETIRED_NAMES) {
-    pattern.lastIndex = 0;
-    for (const match of text.matchAll(pattern)) {
-      if (isAfterFormerly(text, match.index))
-        continue;
-      add("retired", "error", match.index, match[0].length, hint);
-    }
-  }
-  const field = opts.field;
-  const trimmed = text.trim();
-  const isDescription = field === "description" || surface2 === "description" && field === undefined;
-  const isTitle = field === "title" || surface2 === "title" && field === undefined;
-  const isAlt = field === "alt" || surface2 === "alt" && field === undefined;
-  if (isDescription && trimmed) {
-    const length = codePointLength(trimmed);
-    if (length < 70 || length > 160) {
-      add("meta", "error", 0, trimmed.length, `Description is ${length} characters. Write one or two complete sentences of 70 to 160 characters.`, trimmed);
-    }
-    if (/(?:\u2026|\.\.\.)$/.test(trimmed)) {
-      add("meta", "error", trimmed.length - 3, 3, "Description ends in an ellipsis. Write a complete sentence that fits instead of truncating.", trimmed);
-    } else if (!/[.!?)"\u201D\u2019']$/.test(trimmed)) {
-      add("meta", "error", Math.max(0, trimmed.length - 20), 20, "Description stops mid-sentence. End it with a complete sentence.", trimmed);
-    }
-  }
-  if (isTitle && trimmed) {
-    const length = codePointLength(trimmed);
-    if (length > 65)
-      add("meta", "error", 0, trimmed.length, `Title is ${length} characters. Keep it to 65 or fewer.`, trimmed);
-    const brand = opts.config?.brand?.trim();
-    const brandCount = brand ? [...trimmed.matchAll(new RegExp(`(?<![\\w-])${escapeRegExp(brand)}(?![\\w-])`, "gi"))].length : 0;
-    const segments = titleSegments(trimmed);
-    if (brandCount > 1 || new Set(segments).size < segments.length) {
-      add("meta", "error", 0, trimmed.length, "The title repeats a name. Name the brand once.", trimmed);
-    }
-  }
-  if (isAlt && trimmed) {
-    const length = codePointLength(trimmed);
-    if (length > 125)
-      add("meta", "error", 0, trimmed.length, `Alt text is ${length} characters. Describe the image in 125 or fewer.`, trimmed);
-    if (/^(?:an?\s+)?(?:image|picture|photo|screenshot)\s+of\b/i.test(trimmed)) {
-      add("meta", "error", 0, 12, "Describe what the image shows. Do not start with \u201CImage of\u201D.", trimmed);
-    }
-    if (/\s[\u2014\u2013|]\s|\s-\s/.test(trimmed)) {
-      add("meta", "error", 0, trimmed.length, "Alt text reads as a title and tagline. Describe what the image shows.", trimmed);
-    }
-  }
-  if (format === "html" || METADATA_SURFACES.has(surface2)) {
-    for (const match of text.matchAll(/`|\*\*/g)) {
-      add("render", "error", match.index, match[0].length, "Markdown syntax renders literally here. Use markup, or write the command in prose.");
-    }
-  }
-  if (format !== "markdown") {
-    for (const match of text.matchAll(/&(?:apos|quot|amp|lt|gt|#39|#x27);/g)) {
-      add("render", "error", match.index, match[0].length, "An HTML entity renders literally. Escape it once.");
-    }
-  }
-  for (const match of masked.matchAll(/[a-z]\.[A-Z][a-z]/g)) {
-    add("render", "error", match.index, match[0].length, "Two sentences are glued together. Add a space after the period.");
-  }
-  for (const match of masked.matchAll(/(?<![\w.,#-])1 ([a-z]+s)\b/g)) {
-    const noun = match[1] ?? "";
-    if (SINGULAR_S.has(noun) || /(?:ss|us|is|ics)$/.test(noun))
-      continue;
-    if (ORDINAL_LABEL.test(masked.slice(Math.max(0, match.index - 12), match.index)))
-      continue;
-    add("render", "warn", match.index, match[0].length, "The count does not agree with its noun. Test zero, one, and several.");
-  }
-  if (surface2 === "generated") {
-    const spans = sentenceSpans(masked);
-    const last = spans[spans.length - 1];
-    if (last) {
-      const sentence = masked.slice(last.start, last.end);
-      for (const match of sentence.matchAll(SIGNIFICANCE_CLOSER)) {
-        add("generated", "error", last.start + match.index, match[0].length, "The text ends on a significance claim. End on the last supported fact.");
-      }
-    }
-    for (const match of masked.matchAll(PROCESS_WORDS)) {
-      add("generated", "error", match.index, match[0].length, "Do not describe how the text was made or what was fetched.");
-    }
-    for (const match of masked.matchAll(RELATIVE_DATES)) {
-      add("generated", "error", match.index, match[0].length, "Write dates as dates in text that stays published.");
-    }
-    for (const match of masked.matchAll(GOVERNING_CLAIM)) {
-      add("generated", "error", match.index, match[0].length, "Name the speaker and role without paraphrasing the quote in the attribution.");
-    }
-  }
-  return findings;
-}
-
 // src/public-copy/markdown.ts
 var LIST_ITEM = /^\s{0,3}(?:[-*+]|\d{1,9}[.)])\s+/;
 var HEADING = /^ {0,3}(#{1,6})(?:\s+(.*?))?\s*#*\s*$/;
@@ -1413,6 +1704,92 @@ function lineOf(location) {
   return match?.[1] ? Number(match[1]) : 0;
 }
 
+// src/public-copy/menus.ts
+import { existsSync, readFileSync } from "fs";
+import { dirname, join, resolve } from "path";
+var DESKTOP_FOUNDATION_PACKAGE = "@hraness/desktop-foundation";
+function menuFindings(report) {
+  const findings = [];
+  for (const result of report.results) {
+    if (!result.valid) {
+      findings.push({
+        rule: "menu",
+        severity: "error",
+        surface: "body",
+        location: result.file,
+        excerpt: `not a valid menu snapshot (${result.error ?? "unknown"})`,
+        hint: "Write the fixture as a protocol v2 snapshot, the JSON the menu sends, one file per state."
+      });
+      continue;
+    }
+    for (const finding of result.findings) {
+      findings.push({
+        rule: "menu",
+        severity: finding.severity === "error" ? "error" : "warn",
+        surface: "body",
+        location: `${result.file}#${finding.path}`,
+        excerpt: `${finding.rule}: ${finding.message}`,
+        hint: "See the menu rules in desktop-foundation docs/protocol-v2.md \xA7 Menu lint."
+      });
+    }
+  }
+  return findings;
+}
+function packageRoot(entry) {
+  let dir = dirname(entry);
+  for (;; ) {
+    const manifest = join(dir, "package.json");
+    if (existsSync(manifest)) {
+      try {
+        if (JSON.parse(readFileSync(manifest, "utf8")).name === DESKTOP_FOUNDATION_PACKAGE)
+          return dir;
+      } catch {}
+    }
+    const parent = dirname(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function findCompanionCli(root, configured, override) {
+  const explicit = override ?? configured;
+  let pkg;
+  if (explicit) {
+    pkg = resolve(root, explicit);
+  } else {
+    try {
+      pkg = packageRoot(Bun.resolveSync(DESKTOP_FOUNDATION_PACKAGE, root));
+    } catch {
+      pkg = undefined;
+    }
+  }
+  const cli = pkg ? join(pkg, "dist", "src", "cli.js") : undefined;
+  if (!cli || !existsSync(cli)) {
+    throw new Error(explicit ? `No desktop-foundation companion CLI at ${cli ?? explicit}. Point --menu-kit or menus.companion at an installed ${DESKTOP_FOUNDATION_PACKAGE} 0.8.0 or later.` : `menus needs ${DESKTOP_FOUNDATION_PACKAGE} 0.8.0 or later. Install it, or pass --menu-kit <package dir>.`);
+  }
+  return cli;
+}
+function lintMenuFixtures(root, files, options) {
+  if (!files.length)
+    return [];
+  const args = [process.execPath, options.companionCli, "lint-menu", "--strict", "--json"];
+  for (const noun of options.properNouns ?? [])
+    args.push("--proper-noun", noun);
+  const run = Bun.spawnSync([...args, ...files], { cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
+  const out = run.stdout.toString().trim();
+  let report;
+  try {
+    report = JSON.parse(out.split(`
+`).pop() ?? "");
+  } catch {
+    throw new Error(`companion lint-menu failed (exit ${run.exitCode}): ${(run.stderr.toString() || out).trim().split(`
+`)[0] ?? ""}`);
+  }
+  if (!Array.isArray(report.results))
+    throw new Error(`companion lint-menu printed an unexpected report (exit ${run.exitCode}).`);
+  return menuFindings(report);
+}
+
 // src/public-copy/pins.ts
 var SEMVER = String.raw`(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?`;
 function parseVersion(value) {
@@ -1439,7 +1816,7 @@ function compareVersions(left, right) {
     return -1;
   return a.prerelease < b.prerelease ? -1 : 1;
 }
-function escapeRegExp2(value) {
+function escapeRegExp3(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function repositoryFor(pkg) {
@@ -1459,11 +1836,11 @@ function withLine(location, text, index) {
 }
 function findInstallPins(text, pkg) {
   const patterns = [
-    new RegExp(`(?<![\\w@/-])${escapeRegExp2(pkg.name)}@v?${SEMVER}(?![\\w.])`, "g")
+    new RegExp(`(?<![\\w@/-])${escapeRegExp3(pkg.name)}@v?${SEMVER}(?![\\w.])`, "g")
   ];
   const repository = repositoryFor(pkg);
   if (repository) {
-    const slug = escapeRegExp2(repository);
+    const slug = escapeRegExp3(repository);
     patterns.push(new RegExp(`(?<![\\w-])${slug}(?:\\.git)?#v?${SEMVER}(?![\\w.])`, "g"));
     patterns.push(new RegExp(`github\\.com/${slug}/releases/download/v?${SEMVER}(?![\\w.])`, "g"));
   }
@@ -1512,8 +1889,8 @@ function checkInstallPins(texts, pkg) {
 function checkGuides(repoRoot, options = {}) {
   const findings = [];
   for (const name of SYNCED_GUIDES) {
-    const path = join(repoRoot, name);
-    if (!existsSync(path)) {
+    const path = join2(repoRoot, name);
+    if (!existsSync2(path)) {
       if (options.required) {
         findings.push({
           rule: "guides",
@@ -1526,7 +1903,7 @@ function checkGuides(repoRoot, options = {}) {
       }
       continue;
     }
-    findings.push(...checkGuideText(name, readFileSync(path, "utf8"), name));
+    findings.push(...checkGuideText(name, readFileSync2(path, "utf8"), name));
   }
   return findings;
 }
@@ -1536,7 +1913,7 @@ function expand(root, patterns, exclude) {
   const files = new Set;
   for (const pattern of patterns) {
     if (!/[*?[{]/.test(pattern)) {
-      if (existsSync(join(root, pattern)))
+      if (existsSync2(join2(root, pattern)))
         files.add(pattern);
       continue;
     }
@@ -1549,9 +1926,11 @@ function expand(root, patterns, exclude) {
   return [...files].sort();
 }
 function read(root, file2) {
-  return readFileSync(join(root, file2), "utf8");
+  return readFileSync2(join2(root, file2), "utf8");
 }
-function runPublicCopy(root, config) {
+var COPY_SECTIONS = ["markdown", "html", "text", "json", "package", "guides", "cli", "menus"];
+function runPublicCopy(root, config, options = {}) {
+  const on = (section) => !options.only || options.only.has(section);
   const exclude = config.exclude ?? [];
   const findings = [];
   const raw = [];
@@ -1563,12 +1942,14 @@ function runPublicCopy(root, config) {
     descriptions.set(key, [...descriptions.get(key) ?? [], location]);
   };
   const kinds = new Map;
-  for (const file2 of expand(root, config.markdown ?? [], exclude))
-    kinds.set(file2, "body");
-  for (const file2 of expand(root, config.reference ?? [], exclude))
-    kinds.set(file2, "reference");
-  for (const file2 of expand(root, config.generated ?? [], exclude))
-    kinds.set(file2, "generated");
+  if (on("markdown")) {
+    for (const file2 of expand(root, config.markdown ?? [], exclude))
+      kinds.set(file2, "body");
+    for (const file2 of expand(root, config.reference ?? [], exclude))
+      kinds.set(file2, "reference");
+    for (const file2 of expand(root, config.generated ?? [], exclude))
+      kinds.set(file2, "generated");
+  }
   for (const [file2, kind] of [...kinds].sort(([a], [b]) => a.localeCompare(b))) {
     const text = read(root, file2);
     raw.push({ location: file2, text });
@@ -1583,7 +1964,7 @@ function runPublicCopy(root, config) {
     if (description)
       noteDescription(description.trim().replace(/^(["'])(.*)\1$/, "$2"), file2);
   }
-  const htmlFiles = expand(root, config.html ?? [], exclude);
+  const htmlFiles = on("html") ? expand(root, config.html ?? [], exclude) : [];
   for (const file2 of htmlFiles) {
     const html = read(root, file2);
     raw.push({ location: file2, text: html });
@@ -1600,9 +1981,9 @@ function runPublicCopy(root, config) {
     }
   }
   const textFiles = [];
-  for (const entry of config.text ?? []) {
-    const path = join(root, entry.file);
-    if (!existsSync(path))
+  for (const entry of on("text") ? config.text ?? [] : []) {
+    const path = join2(root, entry.file);
+    if (!existsSync2(path))
       throw new Error(`text file not found: ${entry.file}`);
     const text = read(root, entry.file);
     textFiles.push(entry.file);
@@ -1614,9 +1995,9 @@ function runPublicCopy(root, config) {
     }
   }
   const jsonFiles = [];
-  for (const entry of config.json ?? []) {
-    const path = join(root, entry.file);
-    if (!existsSync(path))
+  for (const entry of on("json") ? config.json ?? [] : []) {
+    const path = join2(root, entry.file);
+    if (!existsSync2(path))
       throw new Error(`json file not found: ${entry.file}`);
     const parsed = JSON.parse(read(root, entry.file));
     jsonFiles.push(entry.file);
@@ -1626,7 +2007,26 @@ function runPublicCopy(root, config) {
       findings.push(...lintCopy(match.value, { surface: entry.surface, location: `${entry.file}#${match.path}`, config }));
     }
   }
-  if (config.package) {
+  const cliFiles = [];
+  for (const entry of on("cli") ? config.cli ?? [] : []) {
+    const matched = expand(root, [entry.files], exclude);
+    if (!matched.length)
+      throw new Error(`cli files not found: ${entry.files}`);
+    for (const file2 of matched) {
+      cliFiles.push(file2);
+      findings.push(...lintCliHelp(read(root, file2), { kind: entry.kind, location: file2, config }));
+    }
+  }
+  const menuFiles = [];
+  if (on("menus") && config.menus) {
+    const matched = expand(root, config.menus.fixtures, exclude);
+    if (!matched.length)
+      throw new Error(`menu fixtures not found: ${config.menus.fixtures.join(", ")}`);
+    menuFiles.push(...matched);
+    const companionCli = findCompanionCli(root, config.menus.companion, options.menuKit);
+    findings.push(...lintMenuFixtures(root, matched, { companionCli, ...config.properNouns ? { properNouns: config.properNouns } : {} }));
+  }
+  if (on("package") && config.package) {
     const manifest = JSON.parse(read(root, config.package));
     const name = manifest.name;
     const version = manifest.version;
@@ -1654,9 +2054,9 @@ function runPublicCopy(root, config) {
       });
     }
   }
-  if (config.guides !== false)
+  if (on("guides") && config.guides !== false)
     findings.push(...checkGuides(root, { required: config.guides === "required" }));
-  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles])].sort();
+  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles, ...cliFiles, ...menuFiles])].sort();
   return { findings: sortFindings(findings), files };
 }
 function sortFindings(findings) {
@@ -1665,22 +2065,39 @@ function sortFindings(findings) {
   return [...findings].sort((a, b) => fileOf(a.location).localeCompare(fileOf(b.location)) || lineOf2(a.location) - lineOf2(b.location) || a.location.localeCompare(b.location) || a.rule.localeCompare(b.rule) || a.excerpt.localeCompare(b.excerpt));
 }
 function loadCopyConfig(root, configPath = DEFAULT_CONFIG_FILE) {
-  const path = resolve(root, configPath);
-  if (!existsSync(path))
+  const path = resolve2(root, configPath);
+  if (!existsSync2(path))
     throw new Error(`No ${relative(root, path) || configPath} in ${root}.`);
-  return parseCopyConfig(JSON.parse(readFileSync(path, "utf8")));
+  return parseCopyConfig(JSON.parse(readFileSync2(path, "utf8")));
 }
 function baselinePath(root, config) {
-  return resolve(root, config.baseline ?? DEFAULT_BASELINE_FILE);
+  return resolve2(root, config.baseline ?? DEFAULT_BASELINE_FILE);
 }
 function readBaseline(root, config) {
   const path = baselinePath(root, config);
-  if (!existsSync(path))
+  if (!existsSync2(path))
     return;
-  return parseBaseline(JSON.parse(readFileSync(path, "utf8"))).counts;
+  return parseBaseline(JSON.parse(readFileSync2(path, "utf8"))).counts;
 }
 function writeBaseline(root, config, counts) {
   writeFileSync(baselinePath(root, config), serializeBaseline(counts));
+}
+
+// src/public-copy/annotations.ts
+function escapeData(value) {
+  return value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll(`
+`, "%0A");
+}
+function escapeProperty(value) {
+  return escapeData(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
+}
+function annotation(finding, advisory) {
+  const level = advisory || finding.severity !== "error" ? "warning" : "error";
+  const file2 = stripLocationSuffix(finding.location);
+  const line = /:(\d+)$/.exec(finding.location)?.[1];
+  const where = finding.location.includes("#") ? ` (${finding.location.slice(finding.location.indexOf("#") + 1)})` : "";
+  const props = [`file=${escapeProperty(file2)}`, ...line ? [`line=${line}`] : [], `title=${escapeProperty(`copy lint: ${finding.rule}`)}`];
+  return `::${level} ${props.join(",")}::${escapeData(`${finding.excerpt}${where} \xB7 ${finding.hint}`)}`;
 }
 
 // src/public-copy-cli.ts
@@ -1692,12 +2109,16 @@ Options:
   --root <dir>         Repository root (default: current directory)
   --config <file>      Config file, relative to the root (default: ${DEFAULT_CONFIG_FILE})
   --update-baseline    Write the baseline. The first run records current counts; later runs only lower them.
+  --only <sections>    Check only these comma-separated sections: ${COPY_SECTIONS.join(", ")}
+  --menu-kit <dir>     An installed @hraness/desktop-foundation package for the menu checks
+  --advisory           Report findings but exit 0, for a check that only warns
+  --annotations        Also print GitHub Actions annotations (warnings under --advisory)
   --json               Print findings and the comparison as JSON
   --quiet              Print only errors and the summary
   -h, --help           Show this help
 `;
 function parseArgs(argv) {
-  const options = { root: ".", config: DEFAULT_CONFIG_FILE, updateBaseline: false, json: false, quiet: false };
+  const options = { root: ".", config: DEFAULT_CONFIG_FILE, updateBaseline: false, json: false, quiet: false, advisory: false, annotations: false };
   for (let index = 0;index < argv.length; index += 1) {
     const arg = argv[index];
     const value = () => {
@@ -1719,13 +2140,30 @@ function parseArgs(argv) {
       options.json = true;
     else if (arg === "--quiet")
       options.quiet = true;
-    else
+    else if (arg === "--advisory")
+      options.advisory = true;
+    else if (arg === "--annotations")
+      options.annotations = true;
+    else if (arg === "--menu-kit")
+      options.menuKit = value();
+    else if (arg === "--only") {
+      const sections = value().split(",").map((section) => section.trim()).filter(Boolean);
+      for (const section of sections) {
+        if (!COPY_SECTIONS.includes(section))
+          throw new Error(`Unknown section ${section}. Use ${COPY_SECTIONS.join(", ")}.`);
+      }
+      if (!sections.length)
+        throw new Error("--only needs at least one section.");
+      options.only = new Set(sections);
+    } else
       throw new Error(`Unknown option ${arg}.`);
   }
+  if (options.only && options.updateBaseline)
+    throw new Error("--update-baseline records every section. Run it without --only.");
   return options;
 }
 function line(finding) {
-  return `${finding.severity === "error" ? "error" : "warn "}  ${finding.rule.padEnd(9)} ${finding.location}
+  return `${finding.severity === "error" ? "error" : "warn "}  ${finding.rule.padEnd(10)} ${finding.location}
         ${finding.excerpt}
         ${finding.hint}`;
 }
@@ -1746,13 +2184,13 @@ ${USAGE}`);
     console.log(USAGE);
     return 0;
   }
-  const root = resolve2(options.root);
+  const root = resolve3(options.root);
   let result;
   let config;
   let baseline;
   try {
     config = loadCopyConfig(root, options.config);
-    result = runPublicCopy(root, config);
+    result = runPublicCopy(root, config, { ...options.only ? { only: options.only } : {}, ...options.menuKit ? { menuKit: options.menuKit } : {} });
     baseline = readBaseline(root, config);
   } catch (error) {
     console.error(`hraness-copy-lint: ${error.message}`);
@@ -1767,9 +2205,14 @@ ${USAGE}`);
     writeBaseline(root, config, recorded);
   }
   const comparison = compareBaseline(current, recorded ?? {});
+  const failed = comparison.regressions.length > 0 && !options.advisory;
+  if (options.annotations) {
+    for (const finding of result.findings)
+      console.log(annotation(finding, options.advisory));
+  }
   if (options.json) {
-    console.log(JSON.stringify({ version: PUBLIC_COPY_RULES_VERSION, files: result.files, findings: result.findings, baseline: recorded ?? null, comparison }, null, 2));
-    return comparison.regressions.length ? 1 : 0;
+    console.log(JSON.stringify({ version: PUBLIC_COPY_RULES_VERSION, advisory: options.advisory, files: result.files, findings: result.findings, baseline: recorded ?? null, comparison }, null, 2));
+    return failed ? 1 : 0;
   }
   for (const finding of result.findings) {
     if (options.quiet && finding.severity !== "error")
@@ -1787,10 +2230,13 @@ ${PUBLIC_COPY_RULES_VERSION}: ${plural(result.files.length, "file")} checked, ${
     for (const change of comparison.regressions) {
       console.log(`Rose: ${change.file} ${change.rule} ${change.baseline} \u2192 ${change.current}`);
     }
-    if (comparison.improvements.length && !options.updateBaseline) {
+    if (comparison.improvements.length && !options.updateBaseline && !options.only) {
       console.log(`${plural(comparison.improvements.length, "count")} fell below the baseline. Run with --update-baseline to record the lower counts.`);
     }
   }
-  return comparison.regressions.length ? 1 : 0;
+  if (options.advisory && comparison.regressions.length) {
+    console.log("Advisory run: these findings do not fail the check. Drop --advisory to enforce them.");
+  }
+  return failed ? 1 : 0;
 }
 process.exit(main(process.argv.slice(2)));

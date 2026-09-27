@@ -23,7 +23,11 @@ export type CopyRule =
   | "pins"
   | "render"
   | "generated"
-  | "guides";
+  | "guides"
+  | "cli-budget"
+  | "cli-case"
+  | "cli-jargon"
+  | "menu";
 
 export type CopySeverity = "error" | "warn";
 
@@ -51,6 +55,21 @@ export interface CopyTextEntry {
   readonly surface: CopySurface;
 }
 
+/** Captured CLI output to lint. `kind` sets the budget: `bare` (25 lines, 80 columns), `help` (60 lines), `command` (per-command help). */
+export interface CopyCliEntry {
+  /** A file or glob of captured output, such as `test/golden/help.txt`. */
+  readonly files: string;
+  readonly kind: "bare" | "help" | "command";
+}
+
+/** Menu snapshot fixtures checked with desktop-foundation's `companion lint-menu --strict`. */
+export interface CopyMenusConfig {
+  /** Files or globs of snapshot fixtures (v2 JSON, one per menu state). */
+  readonly fixtures: readonly string[];
+  /** Path to an installed `@hraness/desktop-foundation` package. Defaults to the one the repository resolves. */
+  readonly companion?: string;
+}
+
 export interface CopyJsonEntry {
   readonly file: string;
   /** A JSONPath subset: `$`, `.key`, `['key']`, `[n]`, `[*]`, and `.*`. */
@@ -76,6 +95,12 @@ export interface CopyConfig {
     /** Words allowed in body text on a page that defines them. */
     readonly allowWithDefinition?: readonly string[];
   };
+  /** Captured `--help` and bare-invocation output. */
+  readonly cli?: readonly CopyCliEntry[];
+  /** Menu snapshot fixtures. */
+  readonly menus?: CopyMenusConfig;
+  /** Names that CLI help and menus may capitalize mid-sentence, such as contact or service names. */
+  readonly properNouns?: readonly string[];
   /** The product name as the registry spells it. A `<title>` names it once. */
   readonly brand?: string;
   /** Path to `package.json`, for the install-pin check. */
