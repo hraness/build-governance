@@ -46,6 +46,11 @@ jobs:
           set -euo pipefail
           bun src/cli-golden-cli.ts --cli "bun src/cli-golden/fixtures/good-cli.ts" --name demo --json \
             | jq -e '.results[] | select(.id == "NO_COLOR") | .status == "pass"'
+      - name: The harness catches every problem on Linux, and advisory mode still exits 0
+        run: |
+          set -euo pipefail
+          bun src/cli-golden-cli.ts --cli "bun src/cli-golden/fixtures/bad-cli.ts" --name bad --commands status --advisory --json > "$RUNNER_TEMP/bad.json"
+          jq -e '.ok == false and ([.results[] | select(.status == "pass")] | length) == 0' "$RUNNER_TEMP/bad.json"
 
   # The reusable workflows, called the way a product calls them, with the tools from this commit.
   golden-follows-contract:
