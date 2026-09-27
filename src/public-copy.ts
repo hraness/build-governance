@@ -5,8 +5,10 @@
 export type {
   CopyConfig,
   CopyField,
+  CopyCliEntry,
   CopyFinding,
   CopyFormat,
+  CopyMenusConfig,
   CopyJsonEntry,
   CopyRule,
   CopySeverity,
@@ -43,8 +45,21 @@ export {
 export type { BaselineComparison, CopyBaseline, CopyCounts, CountChange } from "./public-copy/baseline.js";
 export { DEFAULT_BASELINE_FILE, DEFAULT_CONFIG_FILE, parseCopyConfig } from "./public-copy/config.js";
 export { selectJsonPath } from "./public-copy/json-path.js";
-export { checkGuides, loadCopyConfig, readBaseline, runPublicCopy, writeBaseline } from "./public-copy/files.js";
-export type { GuideCheckOptions, PublicCopyResult } from "./public-copy/files.js";
+export { COPY_SECTIONS, checkGuides, loadCopyConfig, readBaseline, runPublicCopy, writeBaseline } from "./public-copy/files.js";
+export type { CopySection, GuideCheckOptions, PublicCopyResult, RunPublicCopyOptions } from "./public-copy/files.js";
+export {
+  CLI_HELP_BUDGETS,
+  CLI_HELP_KINDS,
+  CLI_JARGON,
+  CLI_PROPER_NOUNS,
+  helpLines,
+  lintCliHelp,
+  sentenceCaseBreak,
+} from "./public-copy/cli-help.js";
+export type { CliHelpKind, CliHelpOptions } from "./public-copy/cli-help.js";
+export { DESKTOP_FOUNDATION_PACKAGE, findCompanionCli, lintMenuFixtures, menuFindings } from "./public-copy/menus.js";
+export type { MenuLintReport, MenuLintReportEntry } from "./public-copy/menus.js";
+export { annotation } from "./public-copy/annotations.js";
 export {
   CopyAssertionError,
   expectCountAgreement,

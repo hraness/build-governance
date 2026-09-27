@@ -1,10 +1,11 @@
 import { COPY_SURFACES } from "./types.js";
-import type { CopyConfig, CopyJsonEntry, CopySurface, CopyTextEntry } from "./types.js";
+import type { CopyCliEntry, CopyConfig, CopyJsonEntry, CopySurface, CopyTextEntry } from "./types.js";
 
 export const DEFAULT_CONFIG_FILE = "public-copy.config.json";
 export const DEFAULT_BASELINE_FILE = ".public-copy-baseline.json";
 
-const KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides"]);
+const KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides", "cli", "menus", "properNouns"]);
+const CLI_KINDS = new Set(["bare", "help", "command"]);
 
 function object(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} must be an object.`);
@@ -68,6 +69,28 @@ export function parseCopyConfig(value: unknown): CopyConfig {
       ...(vocabulary.allowWithDefinition === undefined ? {} : { allowWithDefinition: strings(vocabulary.allowWithDefinition, "vocabulary.allowWithDefinition") }),
     };
   }
+  if (raw.cli !== undefined) {
+    if (!Array.isArray(raw.cli)) throw new Error("cli must be an array.");
+    config.cli = raw.cli.map((entry, index): CopyCliEntry => {
+      const item = object(entry, `cli[${index}]`);
+      for (const key of Object.keys(item)) {
+        if (key !== "files" && key !== "kind") throw new Error(`Unknown cli[${index}] key “${key}”.`);
+      }
+      if (typeof item.kind !== "string" || !CLI_KINDS.has(item.kind)) throw new Error(`cli[${index}].kind must be one of bare, help, command.`);
+      return { files: file(item.files, `cli[${index}].files`), kind: item.kind as CopyCliEntry["kind"] };
+    });
+  }
+  if (raw.menus !== undefined) {
+    const menus = object(raw.menus, "menus");
+    for (const key of Object.keys(menus)) {
+      if (key !== "fixtures" && key !== "companion") throw new Error(`Unknown menus key “${key}”.`);
+    }
+    config.menus = {
+      fixtures: strings(menus.fixtures, "menus.fixtures"),
+      ...(menus.companion === undefined ? {} : { companion: file(menus.companion, "menus.companion") }),
+    };
+  }
+  if (raw.properNouns !== undefined) config.properNouns = strings(raw.properNouns, "properNouns");
   if (raw.brand !== undefined) config.brand = file(raw.brand, "brand");
   if (raw.package !== undefined) config.package = file(raw.package, "package");
   if (raw.baseline !== undefined) config.baseline = file(raw.baseline, "baseline");

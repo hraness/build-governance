@@ -7,11 +7,13 @@ import { join, relative, resolve } from "node:path";
 import { parseBaseline, serializeBaseline } from "./baseline.js";
 import type { CopyCounts } from "./baseline.js";
 import { DEFAULT_BASELINE_FILE, DEFAULT_CONFIG_FILE, parseCopyConfig } from "./config.js";
+import { lintCliHelp } from "./cli-help.js";
 import { checkGuideText, SYNCED_GUIDES } from "./guides.js";
 import { extractHtml } from "./html.js";
 import { selectJsonPath } from "./json-path.js";
 import { lintMarkdown } from "./markdown.js";
 import type { MarkdownKind } from "./markdown.js";
+import { findCompanionCli, lintMenuFixtures } from "./menus.js";
 import { checkInstallPins } from "./pins.js";
 import type { TextSource } from "./pins.js";
 import { excerptAt, lintCopy } from "./rules.js";
@@ -67,8 +69,21 @@ export interface PublicCopyResult {
   readonly files: readonly string[];
 }
 
+/** The config sections `--only` can select. `markdown` also covers `reference` and `generated`. */
+export type CopySection = "markdown" | "html" | "text" | "json" | "package" | "guides" | "cli" | "menus";
+
+export const COPY_SECTIONS: readonly CopySection[] = ["markdown", "html", "text", "json", "package", "guides", "cli", "menus"];
+
+export interface RunPublicCopyOptions {
+  /** Run only these sections. Default: every section the config names. */
+  readonly only?: ReadonlySet<CopySection>;
+  /** An installed `@hraness/desktop-foundation` package directory for the menu checks. Wins over `menus.companion`. */
+  readonly menuKit?: string;
+}
+
 /** Run every configured check over the files under `root`. */
-export function runPublicCopy(root: string, config: CopyConfig): PublicCopyResult {
+export function runPublicCopy(root: string, config: CopyConfig, options: RunPublicCopyOptions = {}): PublicCopyResult {
+  const on = (section: CopySection): boolean => !options.only || options.only.has(section);
   const exclude = config.exclude ?? [];
   const findings: CopyFinding[] = [];
   const raw: TextSource[] = [];
@@ -80,9 +95,11 @@ export function runPublicCopy(root: string, config: CopyConfig): PublicCopyResul
   };
 
   const kinds = new Map<string, MarkdownKind>();
-  for (const file of expand(root, config.markdown ?? [], exclude)) kinds.set(file, "body");
-  for (const file of expand(root, config.reference ?? [], exclude)) kinds.set(file, "reference");
-  for (const file of expand(root, config.generated ?? [], exclude)) kinds.set(file, "generated");
+  if (on("markdown")) {
+    for (const file of expand(root, config.markdown ?? [], exclude)) kinds.set(file, "body");
+    for (const file of expand(root, config.reference ?? [], exclude)) kinds.set(file, "reference");
+    for (const file of expand(root, config.generated ?? [], exclude)) kinds.set(file, "generated");
+  }
   for (const [file, kind] of [...kinds].sort(([a], [b]) => a.localeCompare(b))) {
     const text = read(root, file);
     raw.push({ location: file, text });
@@ -94,7 +111,7 @@ export function runPublicCopy(root: string, config: CopyConfig): PublicCopyResul
     if (description) noteDescription(description.trim().replace(/^(["'])(.*)\1$/, "$2"), file);
   }
 
-  const htmlFiles = expand(root, config.html ?? [], exclude);
+  const htmlFiles = on("html") ? expand(root, config.html ?? [], exclude) : [];
   for (const file of htmlFiles) {
     const html = read(root, file);
     raw.push({ location: file, text: html });
@@ -108,7 +125,7 @@ export function runPublicCopy(root: string, config: CopyConfig): PublicCopyResul
   }
 
   const textFiles: string[] = [];
-  for (const entry of config.text ?? []) {
+  for (const entry of on("text") ? config.text ?? [] : []) {
     const path = join(root, entry.file);
     if (!existsSync(path)) throw new Error(`text file not found: ${entry.file}`);
     const text = read(root, entry.file);
@@ -122,7 +139,7 @@ export function runPublicCopy(root: string, config: CopyConfig): PublicCopyResul
   }
 
   const jsonFiles: string[] = [];
-  for (const entry of config.json ?? []) {
+  for (const entry of on("json") ? config.json ?? [] : []) {
     const path = join(root, entry.file);
     if (!existsSync(path)) throw new Error(`json file not found: ${entry.file}`);
     const parsed: unknown = JSON.parse(read(root, entry.file));
@@ -133,7 +150,26 @@ export function runPublicCopy(root: string, config: CopyConfig): PublicCopyResul
     }
   }
 
-  if (config.package) {
+  const cliFiles: string[] = [];
+  for (const entry of on("cli") ? config.cli ?? [] : []) {
+    const matched = expand(root, [entry.files], exclude);
+    if (!matched.length) throw new Error(`cli files not found: ${entry.files}`);
+    for (const file of matched) {
+      cliFiles.push(file);
+      findings.push(...lintCliHelp(read(root, file), { kind: entry.kind, location: file, config }));
+    }
+  }
+
+  const menuFiles: string[] = [];
+  if (on("menus") && config.menus) {
+    const matched = expand(root, config.menus.fixtures, exclude);
+    if (!matched.length) throw new Error(`menu fixtures not found: ${config.menus.fixtures.join(", ")}`);
+    menuFiles.push(...matched);
+    const companionCli = findCompanionCli(root, config.menus.companion, options.menuKit);
+    findings.push(...lintMenuFixtures(root, matched, { companionCli, ...(config.properNouns ? { properNouns: config.properNouns } : {}) }));
+  }
+
+  if (on("package") && config.package) {
     const manifest = JSON.parse(read(root, config.package)) as Record<string, unknown>;
     const name = manifest.name;
     const version = manifest.version;
@@ -141,7 +177,19 @@ export function runPublicCopy(root: string, config: CopyConfig): PublicCopyResul
     const repository = typeof manifest.repository === "string" ? manifest.repository
       : typeof manifest.repository === "object" && manifest.repository !== null && typeof (manifest.repository as { url?: unknown }).url === "string"
         ? (manifest.repository as { url: string }).url : undefined;
-    findings.push(...checkInstallPins(raw, { name, version, ...(repository ? { repository } : {}) }));
+    // The pins live in the pages and docs, so read them even when --only skipped their sections.
+    const sources = [...raw];
+    const seen = new Set(raw.map(source => source.location));
+    const pages = [
+      ...expand(root, [...config.markdown ?? [], ...config.reference ?? [], ...config.generated ?? [], ...config.html ?? []], exclude),
+      ...(config.text ?? []).map(entry => entry.file).filter(entry => existsSync(join(root, entry))),
+    ];
+    for (const page of pages) {
+      if (seen.has(page)) continue;
+      seen.add(page);
+      sources.push({ location: page, text: read(root, page) });
+    }
+    findings.push(...checkInstallPins(sources, { name, version, ...(repository ? { repository } : {}) }));
     if (typeof manifest.description === "string") {
       findings.push(...lintCopy(manifest.description, { surface: "description", field: "package", location: `${config.package}#description`, config }));
     }
@@ -157,9 +205,9 @@ export function runPublicCopy(root: string, config: CopyConfig): PublicCopyResul
     }
   }
 
-  if (config.guides !== false) findings.push(...checkGuides(root, { required: config.guides === "required" }));
+  if (on("guides") && config.guides !== false) findings.push(...checkGuides(root, { required: config.guides === "required" }));
 
-  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles])].sort();
+  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles, ...cliFiles, ...menuFiles])].sort();
   return { findings: sortFindings(findings), files };
 }
 
