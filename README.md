@@ -157,6 +157,38 @@ expectCountAgreement(count => summary(count)); // "1 check", "3 checks", and "No
 expectNoInternalVocabulary(heroHeading, "heading");
 ```
 
+## Check CLI output
+
+`hraness-cli-golden` runs a built command-line tool the ways the CLI and menu bar style guide (`CLI_MENU_STYLE.md` in hraness/.github) names, then checks line budgets, exit codes, errors, color, and pipes. Each run gets a temporary `HOME`, so it never reads or changes your real settings.
+
+```sh
+hraness-cli-golden --cli "bun src/cli.ts" --name textbutler --commands "setup,status,chats add"
+```
+
+```text
+✓ bare             D2  14 lines, exit 0
+✓ help             D3  42 lines, exit 0
+✗ unknown command  D5  exit 1, want exit 2; second line is "Usage: …", want "→ <cli> --help"
+…
+1 failed, 13 passed.
+```
+
+| Check | Rule | Passes when |
+| --- | --- | --- |
+| `bare` | D2 | Running the tool with no arguments prints at most 25 lines of at most 80 columns to stdout and exits 0 |
+| `help` | D3 | `--help` prints at most 60 lines to stdout and exits 0. Lines over 100 columns warn. |
+| `help:<command>` | D3 | `<command> --help` exits 0 with help on stdout. A different `help <command>` warns. |
+| `version`, `version --json` | D4 | `--version` prints `name X.Y.Z`; with `--json`, `{"name","version"}` |
+| `unknown command` | D5 | An unknown command prints `✗ … "stauts" …` then `→ next command` on stderr, nothing on stdout, no usage dump, and exits 2 |
+| `--json error`, `agent error` | D5 | With `--json`, or with `AI_AGENT=1`, the error is one `{"ok":false,"error":{"code","message","next"}}` document on stdout with exit 2 |
+| `NO_COLOR` | D6 | `NO_COLOR=1` on a terminal prints no color. Skipped where `script` cannot open a pseudo-terminal. |
+| `non-TTY` | D6 | Output to a pipe has no escape sequences |
+| `TERM=dumb` | D6 | `TERM=dumb` output uses the ASCII fallbacks (`OK`, `FAIL`, `WARN`, `->`) instead of `✓ ✗ ⚠ → ● ○ ↻ 🔐` |
+| `\| head -1` | D8 | Closing stdout after one line of `--help` ends the tool quietly, with no panic, trace, or `EPIPE` |
+| `help copy` | D3 | The captured help passes the `cli-case` and `cli-jargon` copy rules |
+
+The command exits 1 when a check fails, 0 under `--advisory`, and 2 for a usage error. Other options: `--unknown <word>`, `--cwd <dir>`, `--env NAME=value`, `--proper-noun <name>`, `--write <dir>` to save the captured output as golden files, `--annotations` for GitHub Actions, `--timeout <seconds>`, and `--json`. In GitHub Actions it also writes a table to the job summary.
+
 ## Check Effect architecture
 
 `inspectEffectArchitecture(program, policy)` walks a TypeScript program and reports Effect code that breaks the architecture policy, such as modules that use Effect without a declared role, native I/O or ambient time outside an adapter, runtime entry points outside a declared runtime root, Effects that are created and never used, erased failures, and type-checker suppressions. `createArchitectureProgram(tsconfigPath)` builds the program from a repository's `tsconfig.json`.
