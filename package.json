@@ -1,7 +1,7 @@
 {
   "name": "@hraness/build-governance",
   "version": "0.2.0",
-  "description": "Build checks shared by Hraness repositories: Effect architecture rules, package inventory, and a public copy lint.",
+  "description": "Build checks shared by Hraness repositories: Effect architecture rules, package inventory, a public copy lint, and CLI output checks.",
   "license": "MIT",
   "type": "module",
   "packageManager": "bun@1.3.14",
@@ -15,7 +15,8 @@
   },
   "homepage": "https://github.com/hraness/build-governance",
   "bin": {
-    "hraness-copy-lint": "./dist/public-copy-cli.js"
+    "hraness-copy-lint": "./dist/public-copy-cli.js",
+    "hraness-cli-golden": "./dist/cli-golden-cli.js"
   },
   "files": [
     "dist",
@@ -39,10 +40,14 @@
     "./public-copy": {
       "types": "./src/public-copy.ts",
       "import": "./dist/public-copy.js"
+    },
+    "./cli-golden": {
+      "types": "./src/cli-golden.ts",
+      "import": "./dist/cli-golden.js"
     }
   },
   "scripts": {
-    "build": "bun build ./src/index.ts ./src/effect-architecture.ts ./src/portfolio-inventory.ts ./src/public-copy.ts ./src/public-copy-cli.ts --outdir ./dist --root ./src --target bun --format esm --packages external",
+    "build": "bun build ./src/index.ts ./src/effect-architecture.ts ./src/portfolio-inventory.ts ./src/public-copy.ts ./src/public-copy-cli.ts ./src/cli-golden.ts ./src/cli-golden-cli.ts --outdir ./dist --root ./src --target bun --format esm --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./src",
     "check:copy": "bun ./src/public-copy-cli.ts",
