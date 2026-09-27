@@ -771,6 +771,15 @@ var ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 function escapeRegExp2(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+var termCache = new Map;
+function termRegex2(term) {
+  let regex = termCache.get(term);
+  if (!regex) {
+    regex = new RegExp(termPattern(term), "gi");
+    termCache.set(term, regex);
+  }
+  return regex;
+}
 function columns(line) {
   return [...line].length;
 }
@@ -781,6 +790,18 @@ function helpLines(text) {
   while (lines.length && !lines[lines.length - 1].trim())
     lines.pop();
   return lines;
+}
+var nounCache = new Map;
+function nounRegex(nouns) {
+  const key = nouns.join("\x00");
+  let regex = nounCache.get(key);
+  if (!regex) {
+    const sorted = [...nouns].filter(Boolean).sort((a, b) => b.length - a.length).map(escapeRegExp2);
+    regex = new RegExp(`(?<![\\p{L}\\p{N}])(?:${sorted.join("|") || "(?!)"})(?![\\p{L}\\p{N}])`, "gu");
+    nounCache.set(key, regex);
+  }
+  regex.lastIndex = 0;
+  return regex;
 }
 function literalSpans(text) {
   const spans = [];
@@ -804,11 +825,8 @@ function literalSpans(text) {
 }
 function sentenceCaseBreak(text, nouns) {
   const exempt = literalSpans(text);
-  for (const noun of nouns) {
-    for (const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp2(noun)}(?![\\p{L}\\p{N}])`, "gu"))) {
-      exempt.push([match.index, match.index + noun.length]);
-    }
-  }
+  for (const match of text.matchAll(nounRegex(nouns)))
+    exempt.push([match.index, match.index + match[0].length]);
   for (const match of text.matchAll(/\S+/g)) {
     const before = text.slice(0, match.index);
     if (!/[\p{L}\p{N}]/u.test(before) || /(?:[.!?:\u00B7|\u2022]|\s[-\u2013]|\()\s*$/.test(before))
@@ -849,15 +867,23 @@ function proseOf(line, index) {
   return { text: trimmed, offset: indent, role: "prose" };
 }
 function glossed(line, term) {
-  const word = termPattern(term);
-  const patterns = [
-    `${word}\\s*\\((?=[^)]*\\S\\s+\\S)[^)]+\\)`,
-    `${word}\\s*:\\s+\\S+\\s+\\S+`,
-    `${word}\\s+(?:is|are)\\s+(?:an?|the)\\s`,
-    `${word}\\s+(?:means|refers\\s+to)\\s`,
-    `\\((?:an?\\s+|the\\s+)?${word}\\)`
-  ];
-  return patterns.some((pattern) => new RegExp(pattern, "i").test(line));
+  return glossPatterns(term).some((pattern) => pattern.test(line));
+}
+var glossCache = new Map;
+function glossPatterns(term) {
+  let patterns = glossCache.get(term);
+  if (!patterns) {
+    const word = termPattern(term);
+    patterns = [
+      `${word}\\s*\\((?=[^)]*\\S\\s+\\S)[^)]+\\)`,
+      `${word}\\s*:\\s+\\S+\\s+\\S+`,
+      `${word}\\s+(?:is|are)\\s+(?:an?|the)\\s`,
+      `${word}\\s+(?:means|refers\\s+to)\\s`,
+      `\\((?:an?\\s+|the\\s+)?${word}\\)`
+    ].map((pattern) => new RegExp(pattern, "i"));
+    glossCache.set(term, patterns);
+  }
+  return patterns;
 }
 function lintCliHelp(text, options) {
   const findings = [];
@@ -881,7 +907,7 @@ function lintCliHelp(text, options) {
   const added = (config?.vocabulary?.add ?? []).map((term) => term.toLowerCase());
   const errorTerms = [...new Set([...CLI_JARGON, ...added])];
   const warnTerms = [...new Set([...CLI_JARGON_WARN_ONLY, ...INTERNAL_VOCABULARY.map((term) => term.toLowerCase())])].filter((term) => !errorTerms.includes(term));
-  lines.forEach((line, index) => {
+  lines.slice(0, 400).forEach((line, index) => {
     const prose = proseOf(line, index);
     const lineNo = index + 1;
     if (prose) {
@@ -892,7 +918,9 @@ function lintCliHelp(text, options) {
     }
     for (const [terms, severity] of [[errorTerms, "error"], [warnTerms, "warn"]]) {
       for (const term of terms) {
-        for (const match of line.matchAll(new RegExp(termPattern(term), "gi"))) {
+        const pattern = termRegex2(term);
+        pattern.lastIndex = 0;
+        for (const match of line.matchAll(pattern)) {
           if (glossed(line, term))
             continue;
           add("cli-jargon", severity, lineNo, excerptAt(line, match.index, match[0].length), `\u201C${match[0]}\u201D is internal vocabulary. Say what the person gets, or gloss it on the same line, as in \u201C${match[0]} (what it means)\u201D.`);
@@ -1313,15 +1341,34 @@ class GoldenRunner {
       const child = spawn(argv[0], argv.slice(1), {
         cwd: this.#options.cwd ?? process.cwd(),
         env: this.#env(spec.env),
-        stdio: ["ignore", "pipe", "pipe"]
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32"
       });
       let stdout = "";
       let stderr = "";
-      let timedOut = false;
       let closedEarly = false;
+      let settled = false;
+      let grace;
+      const killGroup = () => {
+        try {
+          if (child.pid !== undefined && process.platform !== "win32")
+            process.kill(-child.pid, "SIGKILL");
+          else
+            child.kill("SIGKILL");
+        } catch {}
+      };
+      const finish = (captured) => {
+        if (settled)
+          return;
+        settled = true;
+        clearTimeout(timer);
+        if (grace)
+          clearTimeout(grace);
+        resolve({ args: spec.args, stdout, stderr, ...captured });
+      };
       const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGKILL");
+        killGroup();
+        finish({ code: null, signal: "SIGKILL", timedOut: true });
       }, timeout);
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
@@ -1341,14 +1388,17 @@ class GoldenRunner {
         stderr += chunk;
       });
       child.on("error", (error) => {
-        clearTimeout(timer);
-        resolve({ args: spec.args, code: 127, signal: null, stdout, stderr: `${stderr}${error.message}
-` });
+        stderr += `${error.message}
+`;
+        finish({ code: 127, signal: null });
       });
-      child.on("close", (code, signal) => {
-        clearTimeout(timer);
-        resolve({ args: spec.args, code, signal, stdout, stderr, timedOut });
+      child.on("exit", (code, signal) => {
+        grace = setTimeout(() => {
+          killGroup();
+          finish({ code, signal });
+        }, 2000);
       });
+      child.on("close", (code, signal) => finish({ code, signal }));
     });
   }
   async collect(options) {
@@ -1430,7 +1480,7 @@ Example
 class UsageError extends Error {
 }
 function parseArgs(argv) {
-  const options = { cli: "", commands: [], unknown: "stauts", env: {}, properNouns: [], advisory: false, annotations: false, timeout: 30, json: false };
+  const options = { cli: "", command: [], commands: [], unknown: "stauts", env: {}, properNouns: [], advisory: false, annotations: false, timeout: 30, json: false };
   for (let index = 0;index < argv.length; index += 1) {
     const arg = argv[index];
     const value = () => {
@@ -1479,6 +1529,11 @@ function parseArgs(argv) {
   }
   if (!options.cli.trim())
     throw new UsageError("Name the CLI to run with --cli.");
+  try {
+    options.command = splitCommand(options.cli);
+  } catch (error) {
+    throw new UsageError(`--cli: ${error.message}`);
+  }
   return options;
 }
 function version() {
@@ -1509,9 +1564,8 @@ ${ascii ? "->" : "\u2192"} ${NAME} --help`);
     console.log(json ? JSON.stringify({ name: NAME, version: version() }) : `${NAME} ${version()}`);
     return 0;
   }
-  const command = splitCommand(options.cli);
-  const name = options.name ?? defaultName(command);
-  const runner = new GoldenRunner({ command, env: options.env, timeoutSeconds: options.timeout, ...options.cwd ? { cwd: resolve(options.cwd) } : {} });
+  const name = options.name ?? defaultName(options.command);
+  const runner = new GoldenRunner({ command: options.command, env: options.env, timeoutSeconds: options.timeout, ...options.cwd ? { cwd: resolve(options.cwd) } : {} });
   let runs;
   try {
     runs = await runner.collect({ name, commands: options.commands, unknown: options.unknown });

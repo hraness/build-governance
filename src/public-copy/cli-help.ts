@@ -67,6 +67,16 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const termCache = new Map<string, RegExp>();
+function termRegex(term: string): RegExp {
+  let regex = termCache.get(term);
+  if (!regex) {
+    regex = new RegExp(termPattern(term), "gi");
+    termCache.set(term, regex);
+  }
+  return regex;
+}
+
 function columns(line: string): number {
   return [...line].length;
 }
@@ -76,6 +86,20 @@ export function helpLines(text: string): string[] {
   const lines = text.replace(ANSI, "").replace(/\r\n?/g, "\n").split("\n");
   while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop();
   return lines;
+}
+
+const nounCache = new Map<string, RegExp>();
+/** One alternation of every proper noun, longest first, compiled once per list. */
+function nounRegex(nouns: readonly string[]): RegExp {
+  const key = nouns.join("\u0000");
+  let regex = nounCache.get(key);
+  if (!regex) {
+    const sorted = [...nouns].filter(Boolean).sort((a, b) => b.length - a.length).map(escapeRegExp);
+    regex = new RegExp(`(?<![\\p{L}\\p{N}])(?:${sorted.join("|") || "(?!)"})(?![\\p{L}\\p{N}])`, "gu");
+    nounCache.set(key, regex);
+  }
+  regex.lastIndex = 0;
+  return regex;
 }
 
 /** Spans of `text` that hold commands, placeholders, flags, quotes, or code, which sentence case skips. */
@@ -97,11 +121,7 @@ function literalSpans(text: string): Array<[number, number]> {
  */
 export function sentenceCaseBreak(text: string, nouns: readonly string[]): { word: string; index: number } | undefined {
   const exempt = literalSpans(text);
-  for (const noun of nouns) {
-    for (const match of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(noun)}(?![\\p{L}\\p{N}])`, "gu"))) {
-      exempt.push([match.index, match.index + noun.length]);
-    }
-  }
+  for (const match of text.matchAll(nounRegex(nouns))) exempt.push([match.index, match.index + match[0].length]);
   for (const match of text.matchAll(/\S+/g)) {
     const before = text.slice(0, match.index);
     // A new sentence or segment starts after terminal punctuation, a colon, a middle dot, a bar, or a dash.
@@ -152,15 +172,24 @@ export function proseOf(line: string, index: number): HelpText | undefined {
  * A one-word parenthetical such as "(JSON)" or "is open" is not an explanation.
  */
 export function glossed(line: string, term: string): boolean {
-  const word = termPattern(term);
-  const patterns = [
-    `${word}\\s*\\((?=[^)]*\\S\\s+\\S)[^)]+\\)`,
-    `${word}\\s*:\\s+\\S+\\s+\\S+`,
-    `${word}\\s+(?:is|are)\\s+(?:an?|the)\\s`,
-    `${word}\\s+(?:means|refers\\s+to)\\s`,
-    `\\((?:an?\\s+|the\\s+)?${word}\\)`,
-  ];
-  return patterns.some(pattern => new RegExp(pattern, "i").test(line));
+  return glossPatterns(term).some(pattern => pattern.test(line));
+}
+
+const glossCache = new Map<string, RegExp[]>();
+function glossPatterns(term: string): RegExp[] {
+  let patterns = glossCache.get(term);
+  if (!patterns) {
+    const word = termPattern(term);
+    patterns = [
+      `${word}\\s*\\((?=[^)]*\\S\\s+\\S)[^)]+\\)`,
+      `${word}\\s*:\\s+\\S+\\s+\\S+`,
+      `${word}\\s+(?:is|are)\\s+(?:an?|the)\\s`,
+      `${word}\\s+(?:means|refers\\s+to)\\s`,
+      `\\((?:an?\\s+|the\\s+)?${word}\\)`,
+    ].map(pattern => new RegExp(pattern, "i"));
+    glossCache.set(term, patterns);
+  }
+  return patterns;
 }
 
 /** Check one captured help or bare-invocation output. */
@@ -193,7 +222,8 @@ export function lintCliHelp(text: string, options: CliHelpOptions): CopyFinding[
   const errorTerms = [...new Set([...CLI_JARGON, ...added])];
   const warnTerms = [...new Set([...CLI_JARGON_WARN_ONLY, ...INTERNAL_VOCABULARY.map(term => term.toLowerCase())])].filter(term => !errorTerms.includes(term));
 
-  lines.forEach((line, index) => {
+  // Wording rules read at most the first 400 lines; output that long already fails its line budget.
+  lines.slice(0, 400).forEach((line, index) => {
     const prose = proseOf(line, index);
     const lineNo = index + 1;
 
@@ -209,7 +239,9 @@ export function lintCliHelp(text: string, options: CliHelpOptions): CopyFinding[
     // cli-jargon: the whole line, including command names, unless the same line glosses the word.
     for (const [terms, severity] of [[errorTerms, "error"], [warnTerms, "warn"]] as const) {
       for (const term of terms) {
-        for (const match of line.matchAll(new RegExp(termPattern(term), "gi"))) {
+        const pattern = termRegex(term);
+        pattern.lastIndex = 0;
+        for (const match of line.matchAll(pattern)) {
           if (glossed(line, term)) continue;
           add("cli-jargon", severity, lineNo, excerptAt(line, match.index, match[0].length),
             `“${match[0]}” is internal vocabulary. Say what the person gets, or gloss it on the same line, as in “${match[0]} (what it means)”.`);

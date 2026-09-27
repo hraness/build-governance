@@ -122,18 +122,36 @@ export class GoldenRunner {
     }
     const timeout = (this.#options.timeoutSeconds ?? 30) * 1000;
     return new Promise(resolve => {
+      // Its own process group, so a timeout or a leftover grandchild can be killed with the CLI.
       const child = spawn(argv[0]!, argv.slice(1), {
         cwd: this.#options.cwd ?? process.cwd(),
         env: this.#env(spec.env),
         stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
       });
       let stdout = "";
       let stderr = "";
-      let timedOut = false;
       let closedEarly = false;
+      let settled = false;
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      const killGroup = (): void => {
+        try {
+          if (child.pid !== undefined && process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
+          else child.kill("SIGKILL");
+        } catch {
+          // already gone
+        }
+      };
+      const finish = (captured: Omit<CapturedRun, "args" | "stdout" | "stderr">): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (grace) clearTimeout(grace);
+        resolve({ args: spec.args, stdout, stderr, ...captured });
+      };
       const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGKILL");
+        killGroup();
+        finish({ code: null, signal: "SIGKILL", timedOut: true });
       }, timeout);
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
@@ -149,13 +167,17 @@ export class GoldenRunner {
       });
       child.stderr.on("data", (chunk: string) => { stderr += chunk; });
       child.on("error", error => {
-        clearTimeout(timer);
-        resolve({ args: spec.args, code: 127, signal: null, stdout, stderr: `${stderr}${error.message}\n` });
+        stderr += `${error.message}\n`;
+        finish({ code: 127, signal: null });
       });
-      child.on("close", (code, signal) => {
-        clearTimeout(timer);
-        resolve({ args: spec.args, code, signal, stdout, stderr, timedOut });
+      // The CLI exited; give its output a moment to drain, then stop any child still holding the pipes.
+      child.on("exit", (code, signal) => {
+        grace = setTimeout(() => {
+          killGroup();
+          finish({ code, signal });
+        }, 2000);
       });
+      child.on("close", (code, signal) => finish({ code, signal }));
     });
   }
 

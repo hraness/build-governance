@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { checkDumb, checkJsonError, checkPipe, checkUnknown, checkVersion } from "./checks.ts";
 import type { CapturedRun, CheckResult } from "./checks.ts";
 import { countLine, renderAnnotations, renderMarkdown } from "./report.ts";
-import { defaultName, shellQuote, splitCommand } from "./runner.ts";
+import { defaultName, GoldenRunner, shellQuote, splitCommand } from "./runner.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 const cli = join(repoRoot, "src", "cli-golden-cli.ts");
@@ -79,6 +79,33 @@ describe("checks", () => {
   });
 });
 
+describe("GoldenRunner", () => {
+  test("a timeout ends the run even when a grandchild keeps the pipes open", async () => {
+    const runner = new GoldenRunner({ command: ["sh", "-c", "sleep 20 & wait"], timeoutSeconds: 1 });
+    const started = Date.now();
+    try {
+      const captured = await runner.run({ args: [] });
+      expect(captured.timedOut).toBe(true);
+    } finally {
+      runner.dispose();
+    }
+    expect(Date.now() - started).toBeLessThan(5000);
+  }, 10_000);
+
+  test("a CLI that exits while a background child holds stdout still finishes", async () => {
+    const runner = new GoldenRunner({ command: ["sh", "-c", "echo done; sleep 20 &"], timeoutSeconds: 15 });
+    const started = Date.now();
+    try {
+      const captured = await runner.run({ args: [] });
+      expect(captured.code).toBe(0);
+      expect(captured.stdout).toBe("done\n");
+    } finally {
+      runner.dispose();
+    }
+    expect(Date.now() - started).toBeLessThan(6000);
+  }, 10_000);
+});
+
 describe("reports", () => {
   const results: CheckResult[] = [
     { id: "bare", rule: "D2", status: "pass", detail: "8 lines" },
@@ -150,6 +177,9 @@ describe("hraness-cli-golden", () => {
     const missing = harness();
     expect(missing.code).toBe(2);
     expect(missing.stderr).toBe("✗ Name the CLI to run with --cli.\n→ hraness-cli-golden --help\n");
+    const quote = harness("--cli", `bun "src`);
+    expect(quote.code).toBe(2);
+    expect(quote.stderr).toBe("✗ --cli: Unclosed \" in the command.\n→ hraness-cli-golden --help\n");
     const json = harness("--bogus", "--json");
     expect(json.code).toBe(2);
     expect(JSON.parse(json.stdout)).toEqual({ ok: false, error: { code: "usage", message: `Unknown option "--bogus".`, next: "hraness-cli-golden --help" } });

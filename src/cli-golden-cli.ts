@@ -39,6 +39,7 @@ Example
 
 interface Options {
   cli: string;
+  command: string[];
   name?: string;
   commands: string[];
   unknown: string;
@@ -55,7 +56,7 @@ interface Options {
 class UsageError extends Error {}
 
 function parseArgs(argv: readonly string[]): Options | "help" | "version" {
-  const options: Options = { cli: "", commands: [], unknown: "stauts", env: {}, properNouns: [], advisory: false, annotations: false, timeout: 30, json: false };
+  const options: Options = { cli: "", command: [], commands: [], unknown: "stauts", env: {}, properNouns: [], advisory: false, annotations: false, timeout: 30, json: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     const value = (): string => {
@@ -87,6 +88,11 @@ function parseArgs(argv: readonly string[]): Options | "help" | "version" {
     } else throw new UsageError(`Unknown option "${arg}".`);
   }
   if (!options.cli.trim()) throw new UsageError("Name the CLI to run with --cli.");
+  try {
+    options.command = splitCommand(options.cli);
+  } catch (error) {
+    throw new UsageError(`--cli: ${(error as Error).message}`);
+  }
   return options;
 }
 
@@ -116,9 +122,8 @@ async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  const command = splitCommand(options.cli);
-  const name = options.name ?? defaultName(command);
-  const runner = new GoldenRunner({ command, env: options.env, timeoutSeconds: options.timeout, ...(options.cwd ? { cwd: resolve(options.cwd) } : {}) });
+  const name = options.name ?? defaultName(options.command);
+  const runner = new GoldenRunner({ command: options.command, env: options.env, timeoutSeconds: options.timeout, ...(options.cwd ? { cwd: resolve(options.cwd) } : {}) });
   let runs;
   try {
     runs = await runner.collect({ name, commands: options.commands, unknown: options.unknown });
