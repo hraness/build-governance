@@ -70,6 +70,7 @@ describe("lintCliHelp", () => {
       "Flags\n  --json   Print JSON for AI Charts and the API",
       "Paths\n  x read   Read \"Some File\" from ~/Library/Messages/chat.db",
       "Items\n  x add   Add a chat. Replies stay off",
+      "Hints\n  → Start with demo setup\n  ✓ Ready to go\n  🔐 Textbutler needs Full Disk Access",
     ];
     for (const text of ok) expect(rules(text)).toEqual([]);
     expect(rules("Contacts\n  x add   Add Mom to the list\n")).toEqual(["cli-case:error:golden.txt:2"]);
@@ -90,6 +91,9 @@ describe("lintCliHelp", () => {
     expect(rules("Commands\n  x lane   Pick a lane (the queue a chat waits in)\n")).toEqual([]);
     expect(rules("Commands\n  x run   Run the saved setup (a habitat)\n")).toEqual([]);
     expect(rules("Commands\n  x habitat   A habitat is a saved setup\n")).toEqual([]);
+    expect(rules("Commands\n  x receipts   Print receipts (JSON)\n")).toEqual(["cli-jargon:error:golden.txt:2", "cli-jargon:error:golden.txt:2"]);
+    expect(rules("Status\n  Your gate is open\n")).toEqual(["cli-jargon:error:golden.txt:2"]);
+    expect(rules("Commands\n  x lane   lane: the queue a chat waits in\n")).toEqual([]);
   });
 
   test("softer internal words and pin are warnings", () => {

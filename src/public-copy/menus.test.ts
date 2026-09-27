@@ -147,6 +147,19 @@ describe("runPublicCopy with cli and menus", () => {
     expect(advisory.out).toContain("Advisory run");
   });
 
+  test("--json and --annotations cannot be combined", () => {
+    expect(run("--json", "--annotations").code).toBe(2);
+  });
+
+  test("--only package still reads the pages that hold install pins", () => {
+    const pinned = write(join(scratch, "pinned"), {
+      "package.json": JSON.stringify({ name: "@hraness/demo", version: "0.3.0", repository: "github:hraness/demo" }),
+      "README.md": "# Demo\n\nInstall with `bun add github:hraness/demo#v0.1.0`.\n",
+    });
+    const result = runPublicCopy(pinned, { markdown: ["README.md"], package: "package.json", guides: false }, { only: new Set(["package"]) });
+    expect(result.findings.map(f => `${f.rule}:${f.location}`)).toEqual(["pins:README.md:3"]);
+  });
+
   test("--only rejects unknown sections and refuses to rewrite the baseline", () => {
     expect(run("--only", "cli,menu").code).toBe(2);
     const refused = run("--only", "cli", "--update-baseline");

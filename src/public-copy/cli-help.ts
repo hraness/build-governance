@@ -4,7 +4,7 @@
  * one-line summaries, and internal vocabulary without a gloss on the same line.
  * Pure: takes text, returns findings.
  */
-import { definedTerms, excerptAt, INTERNAL_VOCABULARY, lintCopy, termPattern } from "./rules.js";
+import { excerptAt, INTERNAL_VOCABULARY, lintCopy, termPattern } from "./rules.js";
 import type { CopyConfig, CopyFinding, CopySeverity } from "./types.js";
 
 /** Which output a golden holds. The kind decides the budget. */
@@ -105,7 +105,8 @@ export function sentenceCaseBreak(text: string, nouns: readonly string[]): { wor
   for (const match of text.matchAll(/\S+/g)) {
     const before = text.slice(0, match.index);
     // A new sentence or segment starts after terminal punctuation, a colon, a middle dot, a bar, or a dash.
-    if (!before.trim() || /(?:[.!?:·|•]|\s[-–]|\()\s*$/.test(before)) continue;
+    // Status symbols and other leading marks (✓, →, 🔐) do not start the sentence; the first word does.
+    if (!/[\p{L}\p{N}]/u.test(before) || /(?:[.!?:·|•]|\s[-–]|\()\s*$/.test(before)) continue;
     const lead = match[0].search(/[\p{L}\p{N}]/u);
     if (lead === -1) continue;
     const start = match.index + lead;
@@ -145,9 +146,21 @@ export function proseOf(line: string, index: number): HelpText | undefined {
   return { text: trimmed, offset: indent, role: "prose" };
 }
 
-function glossed(line: string, term: string): boolean {
-  if (definedTerms(line, [term]).size) return true;
-  return new RegExp(`\\((?:an?\\s+|the\\s+)?${termPattern(term)}\\)`, "i").test(line);
+/**
+ * Whether `line` explains `term`: "lane (the queue a chat waits in)", "lane: the queue a chat waits in",
+ * "a habitat is a saved setup", "receipt means proof", or "the saved setup (a habitat)".
+ * A one-word parenthetical such as "(JSON)" or "is open" is not an explanation.
+ */
+export function glossed(line: string, term: string): boolean {
+  const word = termPattern(term);
+  const patterns = [
+    `${word}\\s*\\((?=[^)]*\\S\\s+\\S)[^)]+\\)`,
+    `${word}\\s*:\\s+\\S+\\s+\\S+`,
+    `${word}\\s+(?:is|are)\\s+(?:an?|the)\\s`,
+    `${word}\\s+(?:means|refers\\s+to)\\s`,
+    `\\((?:an?\\s+|the\\s+)?${word}\\)`,
+  ];
+  return patterns.some(pattern => new RegExp(pattern, "i").test(line));
 }
 
 /** Check one captured help or bare-invocation output. */

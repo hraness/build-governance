@@ -1028,7 +1028,7 @@ function sentenceCaseBreak(text, nouns) {
   }
   for (const match of text.matchAll(/\S+/g)) {
     const before = text.slice(0, match.index);
-    if (!before.trim() || /(?:[.!?:\u00B7|\u2022]|\s[-\u2013]|\()\s*$/.test(before))
+    if (!/[\p{L}\p{N}]/u.test(before) || /(?:[.!?:\u00B7|\u2022]|\s[-\u2013]|\()\s*$/.test(before))
       continue;
     const lead = match[0].search(/[\p{L}\p{N}]/u);
     if (lead === -1)
@@ -1066,9 +1066,15 @@ function proseOf(line, index) {
   return { text: trimmed, offset: indent, role: "prose" };
 }
 function glossed(line, term) {
-  if (definedTerms(line, [term]).size)
-    return true;
-  return new RegExp(`\\((?:an?\\s+|the\\s+)?${termPattern(term)}\\)`, "i").test(line);
+  const word = termPattern(term);
+  const patterns = [
+    `${word}\\s*\\((?=[^)]*\\S\\s+\\S)[^)]+\\)`,
+    `${word}\\s*:\\s+\\S+\\s+\\S+`,
+    `${word}\\s+(?:is|are)\\s+(?:an?|the)\\s`,
+    `${word}\\s+(?:means|refers\\s+to)\\s`,
+    `\\((?:an?\\s+|the\\s+)?${word}\\)`
+  ];
+  return patterns.some((pattern) => new RegExp(pattern, "i").test(line));
 }
 function lintCliHelp(text, options) {
   const findings = [];
@@ -2033,7 +2039,19 @@ function runPublicCopy(root, config, options = {}) {
     if (typeof name !== "string" || typeof version !== "string")
       throw new Error(`${config.package} needs a name and a version.`);
     const repository = typeof manifest.repository === "string" ? manifest.repository : typeof manifest.repository === "object" && manifest.repository !== null && typeof manifest.repository.url === "string" ? manifest.repository.url : undefined;
-    findings.push(...checkInstallPins(raw, { name, version, ...repository ? { repository } : {} }));
+    const sources = [...raw];
+    const seen = new Set(raw.map((source) => source.location));
+    const pages = [
+      ...expand(root, [...config.markdown ?? [], ...config.reference ?? [], ...config.generated ?? [], ...config.html ?? []], exclude),
+      ...(config.text ?? []).map((entry) => entry.file).filter((entry) => existsSync2(join2(root, entry)))
+    ];
+    for (const page of pages) {
+      if (seen.has(page))
+        continue;
+      seen.add(page);
+      sources.push({ location: page, text: read(root, page) });
+    }
+    findings.push(...checkInstallPins(sources, { name, version, ...repository ? { repository } : {} }));
     if (typeof manifest.description === "string") {
       findings.push(...lintCopy(manifest.description, { surface: "description", field: "package", location: `${config.package}#description`, config }));
     }
@@ -2158,6 +2176,8 @@ function parseArgs(argv) {
     } else
       throw new Error(`Unknown option ${arg}.`);
   }
+  if (options.json && options.annotations)
+    throw new Error("Use --json or --annotations, not both: annotations would break the JSON document.");
   if (options.only && options.updateBaseline)
     throw new Error("--update-baseline records every section. Run it without --only.");
   return options;

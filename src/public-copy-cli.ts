@@ -69,6 +69,7 @@ function parseArgs(argv: readonly string[]): Options | "help" {
       options.only = new Set(sections as CopySection[]);
     } else throw new Error(`Unknown option ${arg}.`);
   }
+  if (options.json && options.annotations) throw new Error("Use --json or --annotations, not both: annotations would break the JSON document.");
   if (options.only && options.updateBaseline) throw new Error("--update-baseline records every section. Run it without --only.");
   return options;
 }

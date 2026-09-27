@@ -177,7 +177,19 @@ export function runPublicCopy(root: string, config: CopyConfig, options: RunPubl
     const repository = typeof manifest.repository === "string" ? manifest.repository
       : typeof manifest.repository === "object" && manifest.repository !== null && typeof (manifest.repository as { url?: unknown }).url === "string"
         ? (manifest.repository as { url: string }).url : undefined;
-    findings.push(...checkInstallPins(raw, { name, version, ...(repository ? { repository } : {}) }));
+    // The pins live in the pages and docs, so read them even when --only skipped their sections.
+    const sources = [...raw];
+    const seen = new Set(raw.map(source => source.location));
+    const pages = [
+      ...expand(root, [...config.markdown ?? [], ...config.reference ?? [], ...config.generated ?? [], ...config.html ?? []], exclude),
+      ...(config.text ?? []).map(entry => entry.file).filter(entry => existsSync(join(root, entry))),
+    ];
+    for (const page of pages) {
+      if (seen.has(page)) continue;
+      seen.add(page);
+      sources.push({ location: page, text: read(root, page) });
+    }
+    findings.push(...checkInstallPins(sources, { name, version, ...(repository ? { repository } : {}) }));
     if (typeof manifest.description === "string") {
       findings.push(...lintCopy(manifest.description, { surface: "description", field: "package", location: `${config.package}#description`, config }));
     }
