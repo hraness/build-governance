@@ -7,7 +7,7 @@ Each repository keeps its own settings: an architecture policy map, any product-
 ## Install
 
 ```sh
-bun add -d github:hraness/build-governance#v0.2.0
+bun add -d github:hraness/build-governance#v0.3.0
 ```
 
 The package needs Bun 1.3.14 or later. The architecture checker also needs TypeScript 6 in the consuming repository.
@@ -188,6 +188,38 @@ hraness-cli-golden --cli "bun src/cli.ts" --name textbutler --commands "setup,st
 | `help copy` | D3 | The captured help passes the `cli-case` and `cli-jargon` copy rules |
 
 The command exits 1 when a check fails, 0 under `--advisory`, and 2 for a usage error. Other options: `--unknown <word>`, `--cwd <dir>`, `--env NAME=value`, `--proper-noun <name>`, `--write <dir>` to save the captured output as golden files, `--annotations` for GitHub Actions, `--timeout <seconds>`, and `--json`. In GitHub Actions it also writes a table to the job summary.
+
+## Run the checks in CI
+
+Two reusable workflows run these checks in a product's CI without adding a dependency. Both start as **advisory**: findings show as warnings on the pull request and in the job summary, and the job never fails the caller.
+
+```yaml
+jobs:
+  cli-golden:
+    uses: hraness/build-governance/.github/workflows/cli-golden.yml@v0.3.0
+    with:
+      build: bun install --frozen-lockfile
+      cli: bun src/cli.ts
+      name: textbutler
+      commands: setup,status,chats add
+
+  ux-copy:
+    uses: hraness/build-governance/.github/workflows/ux-copy.yml@v0.3.0
+    with:
+      menu-fixtures: test/menus/*.json
+      bare-golden: test/golden/bare.txt
+      help-golden: test/golden/help.txt
+      command-goldens: test/golden/*.help.txt
+      proper-nouns: Mom
+```
+
+- `cli-golden.yml` builds the CLI (`build`, with `setup: node` or `setup: rust` for those toolchains and `runs-on` for macOS tools), runs `hraness-cli-golden`, and keeps the captured output as a `cli-goldens-<name>-<OS>` artifact.
+- `ux-copy.yml` runs `hraness-copy-lint --only cli,menus` over the captured help and the menu fixtures, with desktop-foundation's menu lint from the release named by `desktop-foundation` (default `v0.8.0`, checked against `desktop-foundation-sha256`). A repository that already has `cli` and `menus` in its `public-copy.config.json` passes `config: public-copy.config.json` instead.
+
+To make a check required, once its findings are fixed:
+
+1. Pass `mode: required`. The job then fails on a finding.
+2. Add the calling job to the `needs` list of the workflow's `Required` job, so branch protection enforces it through the one required check.
 
 ## Check Effect architecture
 

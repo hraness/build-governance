@@ -1,0 +1,6 @@
+Usage: demo setup [options]
+
+Choose where your list lives.
+
+Options
+  --json   Print machine-readable output
