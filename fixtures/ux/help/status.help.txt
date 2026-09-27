@@ -1,0 +1,6 @@
+Usage: demo status [options]
+
+See what Demo is doing.
+
+Options
+  --json   Print machine-readable output

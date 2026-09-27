@@ -1,0 +1,10 @@
+Usage: demo <command> [options]
+
+Start here
+  setup           Choose where your list lives
+  status          See what Demo is doing
+
+Options
+  -h, --help      Show help
+  -V, --version   Show the version
+  --json          Print machine-readable output

@@ -1,0 +1,8 @@
+Demo keeps a list of things for you.
+
+Start here
+  demo setup           Choose where your list lives
+  demo status          See what Demo is doing
+
+All commands: demo --help · Topics: demo help <topic>
+demo 1.2.3
