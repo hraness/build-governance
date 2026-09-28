@@ -59,13 +59,17 @@ function packageRoot(entry: string): string | undefined {
 
 /**
  * The `companion` CLI script of an installed desktop-foundation package: `override` (a package
- * directory) first, then `configured`, then the package the repository at `root` resolves.
+ * directory from `--menu-kit`, resolved against the caller's working directory) first, then
+ * `configured` (the repository's `menus.companion`, resolved against `root`), then the package the
+ * repository at `root` resolves.
  */
 export function findCompanionCli(root: string, configured?: string, override?: string): string {
   const explicit = override ?? configured;
   let pkg: string | undefined;
-  if (explicit) {
-    pkg = resolve(root, explicit);
+  if (override !== undefined) {
+    pkg = resolve(override);
+  } else if (configured !== undefined) {
+    pkg = resolve(root, configured);
   } else {
     try {
       pkg = packageRoot(Bun.resolveSync(DESKTOP_FOUNDATION_PACKAGE, root));
