@@ -1869,8 +1869,10 @@ function packageRoot(entry) {
 function findCompanionCli(root, configured, override) {
   const explicit = override ?? configured;
   let pkg;
-  if (explicit) {
-    pkg = resolve(root, explicit);
+  if (override !== undefined) {
+    pkg = resolve(override);
+  } else if (configured !== undefined) {
+    pkg = resolve(root, configured);
   } else {
     try {
       pkg = packageRoot(Bun.resolveSync(DESKTOP_FOUNDATION_PACKAGE, root));
