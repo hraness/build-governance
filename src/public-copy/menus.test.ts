@@ -72,6 +72,18 @@ describe("findCompanionCli", () => {
     expect(findCompanionCli(root, undefined, elsewhere)).toBe(join(elsewhere, "dist", "src", "cli.js"));
   });
 
+  test("resolves the override from the working directory, not the linted root", () => {
+    const root = write(join(scratch, "other-root"), { "package.json": "{}" });
+    const kit = fakeKit(join(scratch, "cwd-kit"));
+    const cwd = process.cwd();
+    process.chdir(scratch);
+    try {
+      expect(findCompanionCli(root, undefined, "cwd-kit")).toBe(join(kit, "dist", "src", "cli.js"));
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   test("explains what to install when nothing resolves", () => {
     const root = write(join(scratch, "no-kit"), { "package.json": "{}" });
     expect(() => findCompanionCli(root)).toThrow("--menu-kit");
