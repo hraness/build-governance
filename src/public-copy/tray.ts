@@ -67,7 +67,7 @@ export function trayPathFindings(file: string, seen: Set<string> = new Set()): C
   // A bare `Tray.tsx` is often a drawer component; in native code a `Tray` file is a tray.
   const nativeTray = /^Tray\.(?:swift|m|mm|rs|go|py|sh)$/.test(base);
   // shadcn/ui and Radix ship an in-page `components/ui/menubar.tsx`, which is not an OS menu bar.
-  const webComponent = /(?:^|\/)components\/ui\/[^/]+\.[jt]sx$/.test(path);
+  const webComponent = /(?:^|\/)components\/ui\/menu-?bar\.[jt]sx$/.test(path);
   if (lower.endsWith(".json") || webComponent || !(TRAY_NAME.test(base) || nativeTray)) return [];
   return [{ rule: "tray", severity: "error", surface: "reference", location: path, excerpt: `a menu bar source file: ${path}`, hint: HINT }];
 }

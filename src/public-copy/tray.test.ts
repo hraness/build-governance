@@ -18,7 +18,7 @@ describe("trayPathFindings", () => {
   });
 
   test("flags camelCase and PascalCase menu bar files", () => {
-    for (const path of ["src/trayIcon.ts", "Sources/TrayMenu.swift", "src/MenuBarApp.tsx", "cmd/tray.go", "src/systemTray.ts", "src/TrayMenuBuilder.ts", "src/menuBar.ts", "Sources/MenuBarView.swift", "src/MenuBarState.ts", "src/TrayView.swift", "src/Tray.py"]) {
+    for (const path of ["src/trayIcon.ts", "Sources/TrayMenu.swift", "src/MenuBarApp.tsx", "cmd/tray.go", "src/systemTray.ts", "src/TrayMenuBuilder.ts", "src/menuBar.ts", "Sources/MenuBarView.swift", "src/MenuBarState.ts", "src/TrayView.swift", "src/Tray.py", "src/components/ui/TrayIcon.tsx"]) {
       expect({ path, found: trayPathFindings(path).length }).toEqual({ path, found: 1 });
     }
   });

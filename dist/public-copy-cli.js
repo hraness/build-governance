@@ -2057,7 +2057,7 @@ function trayPathFindings(file2, seen = new Set) {
     return [{ rule: "tray", severity: "error", surface: "reference", location: directory, excerpt: `a menu bar directory: ${directory}`, hint: HINT }];
   }
   const nativeTray = /^Tray\.(?:swift|m|mm|rs|go|py|sh)$/.test(base);
-  const webComponent = /(?:^|\/)components\/ui\/[^/]+\.[jt]sx$/.test(path);
+  const webComponent = /(?:^|\/)components\/ui\/menu-?bar\.[jt]sx$/.test(path);
   if (lower.endsWith(".json") || webComponent || !(TRAY_NAME.test(base) || nativeTray))
     return [];
   return [{ rule: "tray", severity: "error", surface: "reference", location: path, excerpt: `a menu bar source file: ${path}`, hint: HINT }];
