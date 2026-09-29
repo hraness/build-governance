@@ -2110,13 +2110,13 @@ var TRAY_PATTERNS = [
   { pattern: /\bserveCompanion\s*\(|\bimport\s*\{[^}]*\bserveCompanion\b/, what: "serveCompanion, the retired tray entry point" },
   { pattern: /\bhraness-companion["'`,\s[\]]+(?:--state-dir|--check-protocol|--foreground|lint-menu)\b/, what: "a hraness-companion tray mode" },
   { pattern: /\bcompanion["'`,\s[\]]+lint-menu\b/, what: "the retired companion lint-menu" },
-  { pattern: /\bTrayIconBuilder\b|\bSystemTray(?:Event|Menu|MenuItem)?\b|\btray_icon::/, what: "a Tauri tray icon", extensions: [".rs"] },
-  { pattern: /\bTrayIconBuilder\b|["']@tauri-apps\/api\/tray["']/, what: "a Tauri tray icon", extensions: SCRIPT },
+  { pattern: /\bTrayIconBuilder\b|\btauri::(?:[\w:]*::)?SystemTray|\buse\s+tauri::\{[^}]*\bSystemTray|\bSystemTray(?:Event|Menu|MenuItem|Submenu)?::|\btray_icon::/, what: "a Tauri tray icon", extensions: [".rs"] },
+  { pattern: /\bTrayIconBuilder\b|["']@tauri-apps\/api\/tray(?:\.js)?["']|\bTrayIcon\.new\s*\(/, what: "a Tauri tray icon", extensions: SCRIPT },
   { pattern: /["']tray-icon["']|\btray-icon\s*=/, what: "a Tauri tray icon", extensions: [".toml"] },
   { pattern: /"trayIcon"\s*:|"systemTray"\s*:/, what: "a Tauri tray icon", extensions: [".json"] },
-  { pattern: /\bnew\s+(?:[A-Za-z_$][\w$]*\.)?Tray\s*\(|(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(?\s*)["']menubar["']/, what: "an Electron tray or the menubar package", extensions: SCRIPT },
+  { pattern: /\bnew\s+(?:electron\.|remote\.)?Tray\s*\(|(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(?\s*)["']menubar["']/, what: "an Electron tray or the menubar package", extensions: SCRIPT },
   { pattern: /\bNSStatusBar\b|\bNSStatusItem\b|\bMenuBarExtra\b/, what: "a macOS menu bar item", extensions: [".swift", ".m", ".mm", ".rs"] },
-  { pattern: /^\s*(?:import\s+(?:[\w.]+\s*,\s*)*|from\s+)(?:rumps|pystray)\b/, what: "a Python menu bar app", extensions: [".py"] },
+  { pattern: /^\s*(?:import\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*|from\s+)(?:rumps|pystray)\b/, what: "a Python menu bar app", extensions: [".py"] },
   { pattern: /["'][^"'\n]*\/systray["']|\bsystray\.(?:Run|Register)\b/, what: "a Go system tray", extensions: [".go"] }
 ];
 var TRAY_ALLOW_MARKER = "tray-guard: retiring";
@@ -2137,12 +2137,13 @@ function trayPathFindings(file2, seen = new Set) {
     seen.add(directory);
     return [{ rule: "tray", severity: "error", surface: "reference", location: directory, excerpt: `a menu bar directory: ${directory}`, hint: HINT }];
   }
-  const nativeTray = /^Tray\.(?:swift|m|mm|rs|go)$/.test(base);
-  if (lower.endsWith(".json") || !(TRAY_NAME.test(base) || nativeTray))
+  const nativeTray = /^Tray\.(?:swift|m|mm|rs|go|py|sh)$/.test(base);
+  const webComponent = /(?:^|\/)components\/ui\/[^/]+\.[jt]sx$/.test(path);
+  if (lower.endsWith(".json") || webComponent || !(TRAY_NAME.test(base) || nativeTray))
     return [];
   return [{ rule: "tray", severity: "error", surface: "reference", location: path, excerpt: `a menu bar source file: ${path}`, hint: HINT }];
 }
-var TRAY_NAME = /^(?:(?:menubar|menu-bar|menu_bar|tray)(?=[-._]|$)|(?:[Mm]enu[Bb]ar|[Tt]ray|[Ss]ystem[Tt]ray)(?=(?:Icon|Menu|Item|Controller|App|Manager|Window)(?:[A-Z]|[-._]))|(?:[Mm]enu[Bb]ar|[Ss]ystem[Tt]ray)(?=[-._]))/;
+var TRAY_NAME = /^(?:(?:menubar|menu-bar|menu_bar|tray)(?=[-._]|$)|(?:[Mm]enu[Bb]ar|[Tt]ray|[Ss]ystem[Tt]ray)(?=(?:Icon|Menu|Item|Controller|App|Manager|Window|View|State)(?:[A-Z]|[-._]))|(?:[Mm]enu[Bb]ar|[Ss]ystem[Tt]ray)(?=[-._]))/;
 function trayTextFindings(text, file2) {
   const lower = file2.toLowerCase();
   const extension = TRAY_SOURCE_EXTENSIONS.find((item) => lower.endsWith(item));

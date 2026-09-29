@@ -18,14 +18,14 @@ describe("trayPathFindings", () => {
   });
 
   test("flags camelCase and PascalCase menu bar files", () => {
-    for (const path of ["src/trayIcon.ts", "Sources/TrayMenu.swift", "src/MenuBarApp.tsx", "cmd/tray.go", "src/systemTray.ts", "src/TrayMenuBuilder.ts", "src/menuBar.ts"]) {
+    for (const path of ["src/trayIcon.ts", "Sources/TrayMenu.swift", "src/MenuBarApp.tsx", "cmd/tray.go", "src/systemTray.ts", "src/TrayMenuBuilder.ts", "src/menuBar.ts", "Sources/MenuBarView.swift", "src/MenuBarState.ts", "src/TrayView.swift", "src/Tray.py"]) {
       expect({ path, found: trayPathFindings(path).length }).toEqual({ path, found: 1 });
     }
   });
 
   test("leaves similar names, docs and images alone", () => {
     for (const path of ["src/menu.ts", "src/trays-of-food.md", "docs/menubar.md", "src/menubarRetire.ts", "fixtures/menubar.json", "src/ashtray.ts", "src/retire-menubar.ts",
-      "assets/tray/icon.png", "docs/tray/old.md", "src/traySize.ts", "src/Trays.ts", "src/components/Tray.tsx", "src/tui/StatusBar.tsx", "src/statusBar.ts", "src/tui/statusbar/index.tsx"]) {
+      "assets/tray/icon.png", "docs/tray/old.md", "src/traySize.ts", "src/Trays.ts", "src/components/Tray.tsx", "src/tui/StatusBar.tsx", "src/statusBar.ts", "src/tui/statusbar/index.tsx", "src/components/ui/menubar.tsx"]) {
       expect({ path, found: trayPathFindings(path).length }).toEqual({ path, found: 0 });
     }
   });
@@ -64,6 +64,12 @@ describe("trayTextFindings", () => {
     expect(excerpts("new electron.Tray(icon)", "src/main.ts")).toEqual(["an Electron tray or the menubar package"]);
     expect(excerpts('import { TrayIcon } from "@tauri-apps/api/tray";', "src/main.ts")).toEqual(["a Tauri tray icon"]);
     expect(excerpts("use tauri::{SystemTray, SystemTrayMenu};", "src/main.rs")).toEqual(["a Tauri tray icon"]);
+    expect(excerpts("let menu = SystemTraySubmenu::new(title, sub);", "src/main.rs")).toEqual(["a Tauri tray icon"]);
+    expect(excerpts("enum Surface { SystemTray, Dock }", "src/lib.rs")).toEqual([]);
+    expect(excerpts("new ui.Tray(opts)", "src/d.ts")).toEqual([]);
+    expect(excerpts('import { TrayIcon } from "@tauri-apps/api/tray.js";', "src/main.ts")).toEqual(["a Tauri tray icon"]);
+    expect(excerpts("await TrayIcon.new({ icon })", "src/main.ts")).toEqual(["a Tauri tray icon"]);
+    expect(excerpts("import os as o, rumps", "app.py")).toEqual(["a Python menu bar app"]);
     expect(excerpts("from pystray import Icon", "app.py")).toEqual(["a Python menu bar app"]);
     expect(excerpts('import "github.com/getlantern/systray"', "main.go")).toEqual(["a Go system tray"]);
     expect(excerpts("\tsystray.Run(onReady, onExit)", "main.go")).toEqual(["a Go system tray"]);
