@@ -4,7 +4,7 @@ import type { CopyCliEntry, CopyConfig, CopyJsonEntry, CopySurface, CopyTextEntr
 export const DEFAULT_CONFIG_FILE = "public-copy.config.json";
 export const DEFAULT_BASELINE_FILE = ".public-copy-baseline.json";
 
-const KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides", "cli", "menus", "properNouns"]);
+const KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides", "cli", "control", "tray", "properNouns"]);
 const CLI_KINDS = new Set(["bare", "help", "command"]);
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -35,6 +35,7 @@ function file(value: unknown, label: string): string {
 export function parseCopyConfig(value: unknown): CopyConfig {
   const raw = object(value, "The config");
   for (const key of Object.keys(raw)) {
+    if (key === "menus") throw new Error("The menus section was removed in build-governance 0.5.0 because menu bars were retired in desktop-foundation 1.0. Delete it, and check the command line with control and tray instead.");
     if (!KEYS.has(key)) throw new Error(`Unknown config key “${key}”.`);
   }
   const config: {
@@ -80,15 +81,30 @@ export function parseCopyConfig(value: unknown): CopyConfig {
       return { files: file(item.files, `cli[${index}].files`), kind: item.kind as CopyCliEntry["kind"] };
     });
   }
-  if (raw.menus !== undefined) {
-    const menus = object(raw.menus, "menus");
-    for (const key of Object.keys(menus)) {
-      if (key !== "fixtures" && key !== "companion") throw new Error(`Unknown menus key “${key}”.`);
+  if (raw.control !== undefined) {
+    const control = object(raw.control, "control");
+    for (const key of Object.keys(control)) {
+      if (!["commands", "status", "tui", "envelopes"].includes(key)) throw new Error(`Unknown control key “${key}”.`);
     }
-    config.menus = {
-      fixtures: strings(menus.fixtures, "menus.fixtures"),
-      ...(menus.companion === undefined ? {} : { companion: file(menus.companion, "menus.companion") }),
+    if (control.tui !== undefined && control.status === undefined) throw new Error("control.tui needs control.status to compare with.");
+    const parsed = {
+      ...(control.commands === undefined ? {} : { commands: file(control.commands, "control.commands") }),
+      ...(control.status === undefined ? {} : { status: file(control.status, "control.status") }),
+      ...(control.tui === undefined ? {} : { tui: file(control.tui, "control.tui") }),
+      ...(control.envelopes === undefined ? {} : { envelopes: strings(control.envelopes, "control.envelopes") }),
     };
+    if (!Object.keys(parsed).length) throw new Error("control needs commands, status, tui, or envelopes.");
+    config.control = parsed;
+  }
+  if (raw.tray !== undefined) {
+    if (raw.tray === true || raw.tray === false) config.tray = raw.tray;
+    else {
+      const tray = object(raw.tray, "tray");
+      for (const key of Object.keys(tray)) {
+        if (key !== "exclude") throw new Error(`Unknown tray key “${key}”.`);
+      }
+      config.tray = tray.exclude === undefined ? {} : { exclude: strings(tray.exclude, "tray.exclude") };
+    }
   }
   if (raw.properNouns !== undefined) config.properNouns = strings(raw.properNouns, "properNouns");
   if (raw.brand !== undefined) config.brand = file(raw.brand, "brand");

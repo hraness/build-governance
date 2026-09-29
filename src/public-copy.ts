@@ -8,12 +8,13 @@ export type {
   CopyCliEntry,
   CopyFinding,
   CopyFormat,
-  CopyMenusConfig,
+  CopyControlConfig,
   CopyJsonEntry,
   CopyRule,
   CopySeverity,
   CopySurface,
   CopyTextEntry,
+  CopyTrayConfig,
   ExtractedText,
 } from "./public-copy/types.js";
 export { COPY_SURFACES } from "./public-copy/types.js";
@@ -45,7 +46,7 @@ export {
 export type { BaselineComparison, CopyBaseline, CopyCounts, CountChange } from "./public-copy/baseline.js";
 export { DEFAULT_BASELINE_FILE, DEFAULT_CONFIG_FILE, parseCopyConfig } from "./public-copy/config.js";
 export { selectJsonPath } from "./public-copy/json-path.js";
-export { COPY_SECTIONS, checkGuides, loadCopyConfig, readBaseline, runPublicCopy, writeBaseline } from "./public-copy/files.js";
+export { COPY_SECTIONS, TRAY_ALWAYS_EXCLUDED, checkGuides, loadCopyConfig, readBaseline, runPublicCopy, writeBaseline } from "./public-copy/files.js";
 export type { CopySection, GuideCheckOptions, PublicCopyResult, RunPublicCopyOptions } from "./public-copy/files.js";
 export {
   CLI_HELP_BUDGETS,
@@ -57,8 +58,22 @@ export {
   sentenceCaseBreak,
 } from "./public-copy/cli-help.js";
 export type { CliHelpKind, CliHelpOptions } from "./public-copy/cli-help.js";
-export { DESKTOP_FOUNDATION_PACKAGE, findCompanionCli, lintMenuFixtures, menuFindings } from "./public-copy/menus.js";
-export type { MenuLintReport, MenuLintReportEntry } from "./public-copy/menus.js";
+export {
+  COMMANDS_SCHEMA,
+  CONTROL_CONTRACT_VERSION,
+  ERROR_SCHEMA,
+  GATE_TIERS,
+  GRAMMAR,
+  OP_CLASSES,
+  RETIRED_VERBS,
+  SHARED_ERROR_CODES,
+  checkCommands,
+  checkEnvelope,
+  checkTuiMatchesStatus,
+  envelopeProblems,
+} from "./public-copy/control.js";
+export type { CommandsCheck } from "./public-copy/control.js";
+export { TRAY_ALLOW_MARKER, TRAY_PATTERNS, TRAY_SOURCE_EXTENSIONS, trayHelpFindings, trayPathFindings, trayTextFindings } from "./public-copy/tray.js";
 export { annotation } from "./public-copy/annotations.js";
 export {
   CopyAssertionError,

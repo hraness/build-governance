@@ -21,7 +21,6 @@ Options:
   --config <file>      Config file, relative to the root (default: ${DEFAULT_CONFIG_FILE})
   --update-baseline    Write the baseline. The first run records current counts; later runs only lower them.
   --only <sections>    Check only these comma-separated sections: ${COPY_SECTIONS.join(", ")}
-  --menu-kit <dir>     An installed @hraness/desktop-foundation package for the menu checks
   --advisory           Report findings but exit 0, for a check that only warns
   --annotations        Also print GitHub Actions annotations (warnings under --advisory)
   --json               Print findings and the comparison as JSON
@@ -38,7 +37,6 @@ interface Options {
   advisory: boolean;
   annotations: boolean;
   only?: Set<CopySection>;
-  menuKit?: string;
 }
 
 function parseArgs(argv: readonly string[]): Options | "help" {
@@ -59,7 +57,7 @@ function parseArgs(argv: readonly string[]): Options | "help" {
     else if (arg === "--quiet") options.quiet = true;
     else if (arg === "--advisory") options.advisory = true;
     else if (arg === "--annotations") options.annotations = true;
-    else if (arg === "--menu-kit") options.menuKit = value();
+    else if (arg === "--menu-kit") throw new Error("--menu-kit was removed in 0.5.0 with the menu checks.");
     else if (arg === "--only") {
       const sections = value().split(",").map(section => section.trim()).filter(Boolean);
       for (const section of sections) {
@@ -100,7 +98,7 @@ function main(argv: readonly string[]): number {
   let baseline;
   try {
     config = loadCopyConfig(root, options.config);
-    result = runPublicCopy(root, config, { ...(options.only ? { only: options.only } : {}), ...(options.menuKit ? { menuKit: options.menuKit } : {}) });
+    result = runPublicCopy(root, config, options.only ? { only: options.only } : {});
     baseline = readBaseline(root, config);
   } catch (error) {
     console.error(`hraness-copy-lint: ${(error as Error).message}`);
