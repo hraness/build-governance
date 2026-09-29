@@ -7,7 +7,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import type { CapturedRun, GoldenRuns } from "./checks.js";
+import { sharedVerbs } from "./checks.js";
+import type { CapturedRun, GoldenRuns, SharedRuns } from "./checks.js";
 
 /** The exact agent markers and audience override the contract names. Stripped so a run starts as a person at a pipe. */
 export const AUDIENCE_VARIABLES: readonly string[] = [
@@ -217,7 +218,24 @@ export class GoldenRunner {
         ],
       } : {}),
       pipe: await this.run({ args: ["--help"], firstLineOnly: true }),
+      shared: await this.collectShared(),
     };
+  }
+
+  /**
+   * The shared commands with `--json`: `commands` first, then each of `status`, `tui` and `doctor` that
+   * `commands --json` lists with the `read` op class, so the harness never runs a verb that changes state.
+   * Each runs under the private HOME.
+   */
+  async collectShared(): Promise<SharedRuns> {
+    const commands = await this.run({ args: ["commands", "--json"] });
+    const listed = sharedVerbs(commands);
+    const runs: { commands: CapturedRun; status?: CapturedRun; tui?: CapturedRun; doctor?: CapturedRun } = { commands };
+    if (!listed.adopted) return runs;
+    for (const verb of ["status", "tui", "doctor"] as const) {
+      if (listed.verbs.get(verb) === "read") runs[verb] = await this.run({ args: [verb, "--json"] });
+    }
+    return runs;
   }
 }
 

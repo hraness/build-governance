@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkDumb, checkJsonError, checkPipe, checkUnknown, checkVersion } from "./checks.ts";
+import { checkDumb, checkJsonError, checkPipe, checkShared, checkUnknown, checkVersion, sharedVerbs } from "./checks.ts";
 import type { CapturedRun, CheckResult } from "./checks.ts";
 import { countLine, renderAnnotations, renderMarkdown } from "./report.ts";
 import { defaultName, GoldenRunner, shellQuote, splitCommand } from "./runner.ts";
@@ -79,7 +79,177 @@ describe("checks", () => {
   });
 });
 
+const AT = "2026-09-28T00:00:00.000Z";
+const envelope = (doc: Record<string, unknown>) => `${JSON.stringify({ generatedAt: AT, ...doc })}\n`;
+const sharedError = (next: unknown, extra: Record<string, unknown> = {}) =>
+  envelope({ ok: false, schema: "hraness.error/1", error: { code: "usage", message: "Unknown command.", next, ...extra } });
+const verbs = (...paths: string[][]) => paths.map(path => ({ path, opClass: "read", schema: "demo.status/1", summary: "One-screen health" }));
+const commandsRun = (paths: string[][] = [["status"], ["tui"], ["doctor"]]) =>
+  run({ args: ["commands", "--json"], stdout: envelope({ ok: true, schema: "hraness.commands/1", data: { product: "demo", verbs: verbs(...paths) } }) });
+const statusRun = (data: unknown = { pending: 0 }, generatedAt = AT) =>
+  run({ args: ["status", "--json"], stdout: `${JSON.stringify({ ok: true, schema: "demo.status/1", generatedAt, data })}\n` });
+const byId = (results: CheckResult[], id: string) => results.find(item => item.id === id)!;
+
+describe("--json error shapes", () => {
+  const next = [{ command: "demo --help", why: "See every command", audience: "agent" }];
+
+  test("the shared envelope with a structured next passes", () => {
+    const checked = checkJsonError("--json error", run({ code: 2, stdout: sharedError(next) }));
+    expect(checked.status).toBe("pass");
+    expect(checked.detail).toContain("shared envelope");
+  });
+
+  test("the older shape with a string next still passes", () => {
+    expect(checkJsonError("--json error", run({ code: 2, stdout: `{"ok":false,"error":{"code":"usage","message":"m","next":"demo --help"}}\n` })).detail).toContain("older error shape");
+  });
+
+  test("a structured next without the envelope fields passes too", () => {
+    expect(checkJsonError("--json error", run({ code: 2, stdout: `${JSON.stringify({ ok: false, error: { code: "usage", message: "m", next } })}\n` })).status).toBe("pass");
+  });
+
+  test("a missing or empty next warns in either shape", () => {
+    expect(checkJsonError("--json error", run({ code: 2, stdout: sharedError([]) })).status).toBe("warn");
+    const missing = envelope({ ok: false, schema: "hraness.error/1", error: { code: "usage", message: "m" } });
+    expect(checkJsonError("--json error", run({ code: 2, stdout: missing })).status).toBe("warn");
+    expect(checkJsonError("--json error", run({ code: 2, stdout: `{"ok":false,"error":{"code":"usage","message":"m","next":""}}` })).status).toBe("warn");
+  });
+
+  test("a malformed structured next fails once the CLI has the shared commands", () => {
+    const stdout = sharedError([{ command: "demo --help", audience: "robot" }]);
+    expect(checkJsonError("--json error", run({ code: 2, stdout }), { adopted: true }).status).toBe("fail");
+    expect(checkJsonError("--json error", run({ code: 2, stdout })).status).toBe("warn");
+    // Outside the envelope it warns, as any non-string next did before.
+    expect(checkJsonError("--json error", run({ code: 2, stdout: `${JSON.stringify({ ok: false, error: { code: "usage", message: "m", next: ["demo --help"] } })}` })).status).toBe("warn");
+  });
+
+  test("the shared envelope is held to the contract", () => {
+    expect(checkJsonError("--json error", run({ code: 2, stdout: sharedError("demo --help") })).detail).toContain("error.next must be an array");
+    const late = `${JSON.stringify({ ok: false, schema: "hraness.error/1", generatedAt: "yesterday", error: { code: "usage", message: "m", next } })}`;
+    expect(checkJsonError("--json error", run({ code: 2, stdout: late })).detail).toContain("generatedAt");
+    const okTrue = envelope({ ok: true, schema: "hraness.error/1", error: { code: "usage", message: "m", next } });
+    expect(checkJsonError("--json error", run({ code: 2, stdout: okTrue })).status).toBe("fail");
+    expect(checkJsonError("--json error", run({ code: 1, stdout: sharedError(next) })).detail).toContain("want exit 2");
+  });
+
+  test("a code other than usage warns, and must exit with that code's status", () => {
+    const notFound = envelope({ ok: false, schema: "hraness.error/1", error: { code: "not-found", message: "m", next } });
+    const adopted = { adopted: true, product: "demo" };
+    expect(checkJsonError("--json error", run({ code: 1, stdout: notFound }), adopted).status).toBe("warn");
+    expect(checkJsonError("--json error", run({ code: 2, stdout: notFound }), adopted).status).toBe("fail");
+    const product = envelope({ ok: false, schema: "hraness.error/1", error: { code: "demo.unknown", message: "m", next } });
+    expect(checkJsonError("--json error", run({ code: 2, stdout: product }), adopted).status).toBe("fail");
+  });
+
+  test("a CLI with the shared commands is held to the envelope even without schema", () => {
+    const bare = `${JSON.stringify({ ok: false, error: { code: "usage", message: "m", next: "demo --help" } })}`;
+    expect(checkJsonError("--json error", run({ code: 2, stdout: bare })).status).toBe("pass");
+    expect(checkJsonError("--json error", run({ code: 2, stdout: bare }), { adopted: true, product: "demo" }).status).toBe("fail");
+    const other = envelope({ ok: false, schema: "hraness.error/1", error: { code: "other.unknown", message: "m", next } });
+    expect(checkJsonError("--json error", run({ code: 1, stdout: other })).status).toBe("warn");
+    expect(checkJsonError("--json error", run({ code: 1, stdout: other }), { adopted: true, product: "demo" }).status).toBe("fail");
+  });
+
+  test("an older-shape document with some other schema field stays in the older shape", () => {
+    const legacy = `${JSON.stringify({ ok: false, schema: "x", error: { code: "usage", message: "m", next: "demo --help" } })}`;
+    expect(checkJsonError("--json error", run({ code: 2, stdout: legacy })).status).toBe("pass");
+  });
+});
+
+describe("shared commands", () => {
+  test("they skip only when commands --json is a usage error", () => {
+    const [skipped] = checkShared({ commands: run({ args: ["commands", "--json"], code: 2, stdout: `{"ok":false,"error":{"code":"usage","message":"m"}}` }) });
+    expect(skipped!.status).toBe("skip");
+    expect(checkShared(undefined)[0]!.status).toBe("skip");
+    expect(sharedVerbs(run({ code: 2, stdout: "" })).adopted).toBe(false);
+    expect(sharedVerbs(run({ code: 1, stdout: sharedError([], { code: "usage" }) })).adopted).toBe(false);
+  });
+
+  test("a usage error in either shape skips; a hang does not", () => {
+    expect(sharedVerbs(run({ code: 1, stdout: `{"ok":false,"error":{"code":"usage","message":"m"}}` })).adopted).toBe(false);
+    const hung = run({ code: null, timedOut: true, stdout: "" });
+    expect(sharedVerbs(hung).adopted).toBe(true);
+    expect(byId(checkShared({ commands: hung }), "commands --json").status).toBe("fail");
+  });
+
+  test("without the shared commands, the error schema's envelope findings warn as in 0.5.0", () => {
+    const loose = `${JSON.stringify({ ok: false, schema: "hraness.error/1", generatedAt: "2026-09-29T00:00:00Z", error: { code: "usage", message: "m", next: "demo --help" } })}`;
+    expect(checkJsonError("--json error", run({ code: 2, stdout: loose })).status).toBe("warn");
+    expect(checkJsonError("--json error", run({ code: 2, stdout: loose }), { adopted: true }).status).toBe("fail");
+    const notFound = envelope({ ok: false, schema: "hraness.error/1", error: { code: "not-found", message: "m", next: [{ command: "demo status", why: "w", audience: "human" }] } });
+    expect(checkJsonError("--json error", run({ code: 3, stdout: notFound })).status).toBe("fail");
+  });
+
+  test("a broken commands --json fails instead of skipping", () => {
+    const internal = envelope({ ok: false, schema: "hraness.error/1", error: { code: "internal", message: "m" } });
+    for (const commands of [
+      run({ code: 1, stdout: internal }),
+      run({ stdout: envelope({ ok: true, schema: "hraness.commands/1", data: { product: "demo", commands: [] } }) }),
+      run({ stdout: `log line\n${commandsRun().stdout}` }),
+    ]) {
+      const results = checkShared({ commands });
+      expect(byId(results, "commands --json").status).toBe("fail");
+      expect(byId(results, "status --json").status).toBe("fail");
+    }
+  });
+
+  test("every shared command passes when it follows the contract", () => {
+    const later = "2026-09-28T00:00:01.000Z";
+    const results = checkShared({ commands: commandsRun(), status: statusRun(), tui: statusRun({ pending: 0 }, later), doctor: statusRun() });
+    expect(results.map(item => `${item.id}:${item.status}`)).toEqual(["commands --json:pass", "status --json:pass", "tui --json:pass", "doctor --json:pass"]);
+  });
+
+  test("a missing tui or doctor verb warns and a missing status run fails", () => {
+    const results = checkShared({ commands: commandsRun([["status"]]) });
+    expect(byId(results, "status --json").status).toBe("fail");
+    expect(byId(results, "tui --json").status).toBe("warn");
+    expect(byId(results, "doctor --json").detail).toContain("no doctor verb");
+  });
+
+  test("a menu bar verb fails commands --json", () => {
+    const results = checkShared({ commands: commandsRun([["status"], ["menubar"]]), status: statusRun() });
+    expect(byId(results, "commands --json").status).toBe("fail");
+  });
+
+  test("an error envelope must exit with its code's status", () => {
+    const unavailable = envelope({ ok: false, schema: "hraness.error/1", error: { code: "owner-unavailable", message: "m" } });
+    expect(byId(checkShared({ commands: commandsRun([["status"]]), status: run({ code: 4, stdout: unavailable }) }), "status --json").status).toBe("pass");
+    expect(byId(checkShared({ commands: commandsRun([["status"]]), status: run({ code: 1, stdout: unavailable }) }), "status --json").detail).toContain("want exit 4");
+    const product = envelope({ ok: false, schema: "hraness.error/1", error: { code: "demo.locked", message: "m" } });
+    expect(byId(checkShared({ commands: commandsRun([["status"]]), status: run({ code: 1, stdout: product }) }), "status --json").status).toBe("pass");
+    expect(byId(checkShared({ commands: commandsRun([["status"]]), status: run({ code: 1, stdout: statusRun().stdout }) }), "status --json").detail).toContain("want exit 0");
+  });
+
+  test("tui --json must match status --json apart from generatedAt", () => {
+    const results = checkShared({ commands: commandsRun(), status: statusRun(), tui: statusRun({ pending: 1 }), doctor: statusRun() });
+    expect(byId(results, "tui --json").status).toBe("warn");
+    const pretty = run({ stdout: JSON.stringify({ ok: true, schema: "demo.status/1", generatedAt: AT, data: { pending: 1 } }, null, 2) });
+    expect(byId(checkShared({ commands: commandsRun(), status: statusRun(), tui: pretty, doctor: statusRun() }), "tui --json").detail).toContain("; ");
+  });
+
+  test("a status run that is not an envelope fails", () => {
+    expect(byId(checkShared({ commands: commandsRun([["status"]]), status: run({ stdout: "Demo is running\n" }) }), "status --json").detail).toContain("not one JSON document");
+    const wrong = `${JSON.stringify({ ok: true, schema: "demo.status/1", generatedAt: AT })}`;
+    expect(byId(checkShared({ commands: commandsRun([["status"]]), status: run({ stdout: wrong }) }), "status --json").status).toBe("fail");
+  });
+});
+
 describe("GoldenRunner", () => {
+  test("only read verbs among status, tui and doctor are run", async () => {
+    const script = join(scratch, "shared.sh");
+    const listing = JSON.stringify({ ok: true, schema: "hraness.commands/1", generatedAt: AT, data: { product: "demo", verbs: [
+      { path: ["status"], opClass: "read" }, { path: ["tui"], opClass: "read" }, { path: ["doctor"], opClass: "operate" },
+    ] } });
+    await Bun.write(script, `if [ "$1" = commands ]; then echo '${listing}'; else echo "$1" >> "${join(scratch, "ran.txt")}"; echo '{}'; fi\n`);
+    const runner = new GoldenRunner({ command: ["sh", script], timeoutSeconds: 10 });
+    try {
+      const shared = await runner.collectShared();
+      expect(Object.keys(shared).sort()).toEqual(["commands", "status", "tui"]);
+    } finally {
+      runner.dispose();
+    }
+    expect(readFileSync(join(scratch, "ran.txt"), "utf8")).toBe("status\ntui\n");
+  }, 10_000);
+
   test("a timeout ends the run even when a grandchild keeps the pipes open", async () => {
     const runner = new GoldenRunner({ command: ["sh", "-c", "sleep 20 & wait"], timeoutSeconds: 1 });
     const started = Date.now();
@@ -140,11 +310,31 @@ describe("hraness-cli-golden", () => {
     const report = JSON.parse(out.stdout) as { ok: boolean; results: CheckResult[] };
     expect(report.ok).toBe(true);
     const statuses = report.results.map(item => `${item.id}:${item.status}`);
-    expect(statuses.filter(item => !item.endsWith(":pass") && item !== "NO_COLOR:skip")).toEqual([]);
+    expect(statuses.filter(item => !item.endsWith(":pass") && item !== "NO_COLOR:skip" && item !== "shared commands:skip")).toEqual([]);
     expect(report.results.map(item => item.id)).toEqual([
       "bare", "help", "help:setup", "help:status", "version", "version --json", "unknown command",
-      "--json error", "agent error", "NO_COLOR", "non-TTY", "TERM=dumb", "| head -1", "help copy",
+      "--json error", "agent error", "NO_COLOR", "non-TTY", "TERM=dumb", "| head -1", "help copy", "shared commands",
     ]);
+  }, 30_000);
+
+  test("a CLI on the shared envelope and commands passes, with next as a list", () => {
+    const out = harness("--cli", good, "--name", "demo", "--commands", "setup,status", "--env", "DEMO_CONTROL=1", "--json");
+    expect(out.code).toBe(0);
+    const report = JSON.parse(out.stdout) as { ok: boolean; results: CheckResult[] };
+    const statuses = report.results.map(item => `${item.id}:${item.status}`);
+    expect(statuses.filter(item => !item.endsWith(":pass") && item !== "NO_COLOR:skip")).toEqual([]);
+    expect(report.results.slice(-4).map(item => item.id)).toEqual(["commands --json", "status --json", "tui --json", "doctor --json"]);
+    expect(byId(report.results, "--json error").detail).toContain("shared envelope");
+  }, 30_000);
+
+  test("a CLI that breaks the shared envelope and commands fails them", () => {
+    const out = harness("--cli", good, "--name", "demo", "--commands", "setup,status", "--env", "DEMO_CONTROL=broken", "--json");
+    expect(out.code).toBe(1);
+    const report = JSON.parse(out.stdout) as { ok: boolean; results: CheckResult[] };
+    const statuses = Object.fromEntries(report.results.map(item => [item.id, item.status]));
+    expect(statuses).toMatchObject({
+      "--json error": "fail", "agent error": "fail", "commands --json": "fail", "status --json": "fail", "tui --json": "warn", "doctor --json": "warn",
+    });
   }, 30_000);
 
   test("a CLI that breaks the contract fails, unless the run is advisory", () => {
@@ -166,6 +356,11 @@ describe("hraness-cli-golden", () => {
       expect(existsSync(join(dir, file))).toBe(true);
     }
     expect(readFileSync(join(dir, "version.txt"), "utf8")).toBe("demo 1.2.3\n");
+    expect(existsSync(join(dir, "commands.json"))).toBe(false);
+    const shared = join(scratch, "goldens-shared");
+    expect(harness("--cli", good, "--name", "demo", "--commands", "status", "--env", "DEMO_CONTROL=1", "--write", shared).code).toBe(0);
+    for (const file of ["commands.json", "status.json", "tui.json", "doctor.json"]) expect(existsSync(join(shared, file))).toBe(true);
+    expect(JSON.parse(readFileSync(join(shared, "commands.json"), "utf8")).schema).toBe("hraness.commands/1");
   }, 30_000);
 
   test("its own CLI follows the contract: help, version, and usage errors", () => {

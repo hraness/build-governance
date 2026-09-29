@@ -5,6 +5,7 @@
  */
 import { helpLines, lintCliHelp } from "../public-copy/cli-help.js";
 import type { CliHelpKind } from "../public-copy/cli-help.js";
+import { checkCommands, checkTuiMatchesStatus, COMMANDS_SCHEMA, envelopeProblems, ERROR_SCHEMA, nextProblems, SHARED_ERROR_CODES } from "../public-copy/control.js";
 import type { CopyConfig, CopyFinding } from "../public-copy/types.js";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -44,6 +45,20 @@ export interface GoldenRuns {
   readonly ttyNoColor?: readonly CapturedRun[];
   /** `--help` with stdout closed after the first line. */
   readonly pipe: CapturedRun;
+  /**
+   * The shared commands, run with `--json`. `commands` is always captured when the runner looks;
+   * the rest are captured only when `commands --json` answers with the commands envelope, and
+   * `tui` and `doctor` only when it lists them.
+   */
+  readonly shared?: SharedRuns;
+}
+
+/** Captured `--json` runs of the shared commands (CLI_MENU_STYLE.md C1). */
+export interface SharedRuns {
+  readonly commands: CapturedRun;
+  readonly status?: CapturedRun;
+  readonly tui?: CapturedRun;
+  readonly doctor?: CapturedRun;
 }
 
 // eslint-disable-next-line no-control-regex
@@ -171,27 +186,192 @@ export function checkUnknown(unknown: string, run: CapturedRun): CheckResult {
   return result("unknown command", "D5", problems, warnings, `${first.trim()} (exit 2)`);
 }
 
-/** D5: with `--json` or an agent audience, the error is one JSON object on stdout with the same exit code. */
-export function checkJsonError(id: string, run: CapturedRun): CheckResult {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Parse stdout as one JSON document, or undefined. */
+function parseJson(stdout: string): unknown {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Why stdout is not a JSON document, for a run that printed none. */
+function notJson(run: CapturedRun): string {
+  return plain(run.stdout).trim()
+    ? "stdout is not one JSON document"
+    : `nothing on stdout${run.stderr.trim() ? ` (stderr: ${quote(nonBlank(run.stderr)[0])})` : ""}`;
+}
+
+/** Where a shared error code's exit status is looked up: a shared code, else 1 for a product code. */
+function exitFor(code: string): number {
+  return Object.hasOwn(SHARED_ERROR_CODES, code) ? SHARED_ERROR_CODES[code]! : 1;
+}
+
+const ONE_LINE = "the envelope spans more than one line; print it on one";
+
+/** A warning when stdout holds the JSON document on more than one line. */
+function oneLine(run: CapturedRun): string[] {
+  return plain(run.stdout).trim().includes("\n") ? [ONE_LINE] : [];
+}
+
+/** What the golden checks know about a CLI's shared commands, from `commands --json`. */
+export interface SharedContext {
+  /** True when `commands --json` printed the commands envelope or another shared-envelope answer. */
+  readonly adopted: boolean;
+  /** The product name from the commands envelope. */
+  readonly product?: string | undefined;
+}
+
+/**
+ * D5 and C4: with `--json` or an agent audience, the error is one JSON object on stdout.
+ * Two shapes pass. The shared envelope (`"schema": "hraness.error/1"`, `generatedAt`, `error.next` as a list of
+ * `{command, why, audience}`) is checked against desktop-foundation's contract; it should be a `usage` error
+ * exiting 2, and any other code must exit with that code's status. A CLI whose `commands --json` shows it has
+ * the shared commands is always held to the shared envelope. Otherwise the older `hraness-cli-kit` shape,
+ * `{"ok":false,"error":{"code","message","next":"<command>"}}` with exit 2, keeps `next` as one command string.
+ * A missing or empty `next` warns in either shape.
+ */
+export function checkJsonError(id: string, run: CapturedRun, shared: SharedContext = { adopted: false }): CheckResult {
   const problems: string[] = [];
   const warnings: string[] = [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(run.stdout);
-  } catch {
-    parsed = undefined;
+  const doc = parseJson(run.stdout);
+  if (!isRecord(doc)) {
+    if (run.code !== 2) problems.push(`${exit(run)}, want exit 2`);
+    problems.push(notJson(run));
+    return result(id, "D5", problems, warnings, "");
   }
-  const doc = parsed as { ok?: unknown; error?: { code?: unknown; message?: unknown; next?: unknown } } | undefined;
-  if (run.code !== 2) problems.push(`${exit(run)}, want exit 2`);
-  if (!doc || typeof doc !== "object") {
-    const where = plain(run.stdout).trim() ? "stdout is not one JSON document" : `nothing on stdout${run.stderr.trim() ? ` (stderr: ${quote(nonBlank(run.stderr)[0])})` : ""}`;
-    problems.push(where);
-  } else {
+  const error = isRecord(doc.error) ? doc.error : undefined;
+  if (shared.adopted || doc.schema === ERROR_SCHEMA) {
+    // A CLI without the shared commands that already prints the error schema passed 0.5.0 on ok, code,
+    // message and exit 2 alone; its envelope findings warn until it adopts the shared commands.
+    const strict = shared.adopted ? problems : warnings;
     if (doc.ok !== false) problems.push('missing "ok": false');
-    if (typeof doc.error?.code !== "string" || typeof doc.error?.message !== "string") problems.push('missing "error": {"code", "message"}');
-    else if (typeof doc.error.next !== "string") warnings.push('no "error.next" command');
+    else strict.push(...envelopeProblems(doc, shared.product));
+    const code = typeof error?.code === "string" ? error.code : undefined;
+    if (!shared.adopted && (code === undefined || typeof error?.message !== "string")) problems.push('missing "error": {"code", "message"}');
+    if (code !== undefined && code !== "usage") warnings.push(`error.code is "${code}"; an unknown command is "usage"`);
+    const want = code === undefined ? 2 : exitFor(code);
+    if (run.code !== want) {
+      const wrong = `${exit(run)}, want exit ${want}${code !== undefined && code !== "usage" ? ` for "${code}"` : ""}`;
+      (shared.adopted || run.code !== 2 ? problems : warnings).push(wrong);
+    }
+    if (error && (!Array.isArray(error.next) || !error.next.length)) warnings.push('no "error.next" command');
+    warnings.push(...oneLine(run));
+    return result(id, "D5", problems, warnings, `{"ok":false,…} on stdout in the shared envelope, ${exit(run)}`);
   }
-  return result(id, "D5", problems, warnings, `{"ok":false,…} on stdout, exit 2`);
+  if (run.code !== 2) problems.push(`${exit(run)}, want exit 2`);
+  if (doc.ok !== false) problems.push('missing "ok": false');
+  if (typeof error?.code !== "string" || typeof error?.message !== "string") problems.push('missing "error": {"code", "message"}');
+  else if (Array.isArray(error.next)) {
+    // Outside the shared envelope a malformed list warns, as any non-string next did in 0.5.0.
+    warnings.push(...nextProblems(error.next, "error.next"));
+    if (!error.next.length) warnings.push('no "error.next" command');
+  } else if (typeof error.next !== "string" || !error.next.trim()) warnings.push('no "error.next" command');
+  return result(id, "D5", problems, warnings, `{"ok":false,…} on stdout in the older error shape, exit 2`);
+}
+
+/**
+ * Whether `commands --json` shows the CLI has the shared commands. A CLI without them answers with a usage
+ * error (exit 2, or a `usage` error envelope); that is the only answer that skips the shared checks. The
+ * op class of each listed verb, by path, when stdout is a commands envelope.
+ */
+export function sharedVerbs(run: CapturedRun): { readonly adopted: boolean; readonly verbs: ReadonlyMap<string, string> } {
+  const doc = parseJson(run.stdout);
+  const verbs = new Map<string, string>();
+  if (isRecord(doc) && isRecord(doc.data) && Array.isArray(doc.data.verbs)) {
+    for (const verb of doc.data.verbs) {
+      if (isRecord(verb) && Array.isArray(verb.path) && verb.path.every(part => typeof part === "string")) {
+        verbs.set(verb.path.join(" "), typeof verb.opClass === "string" ? verb.opClass : "");
+      }
+    }
+  }
+  // A run that hangs or is killed counts as adopted, so the checks fail instead of skipping.
+  if (run.timedOut || run.signal) return { adopted: true, verbs };
+  if (isRecord(doc) && doc.ok === false && isRecord(doc.error) && doc.error.code === "usage") return { adopted: false, verbs };
+  if (isRecord(doc) && (doc.schema === COMMANDS_SCHEMA || doc.schema === ERROR_SCHEMA)) return { adopted: true, verbs };
+  if (isRecord(doc) && doc.ok === true && verbs.size) return { adopted: true, verbs };
+  return { adopted: run.code !== 2, verbs };
+}
+
+function findingProblems(findings: readonly CopyFinding[]): string[] {
+  const problems = findings.slice(0, 3).map(item => item.excerpt);
+  if (findings.length > 3) problems.push(`${findings.length - 3} more`);
+  return problems;
+}
+
+/**
+ * C4: a `--json` run prints one envelope on stdout, valid against desktop-foundation's
+ * contract, and its exit code matches: 0 for `"ok": true`, and the code's exit status for an error
+ * (a product code exits 1). More than one line warns.
+ */
+function envelopeRun(id: string, rule: string, run: CapturedRun, product: string | undefined, extra: readonly string[] = []): { check: CheckResult; doc: unknown } {
+  const problems: string[] = [];
+  const warnings: string[] = [...extra];
+  const doc = parseJson(run.stdout);
+  if (run.timedOut || run.signal) problems.push(exit(run));
+  if (!isRecord(doc)) {
+    problems.push(notJson(run));
+    return { check: result(id, rule, problems, warnings, ""), doc: undefined };
+  }
+  problems.push(...envelopeProblems(doc, product));
+  warnings.push(...oneLine(run));
+  let want: number | undefined;
+  let what = '"ok": true';
+  if (doc.ok === true) want = 0;
+  else if (doc.ok === false && isRecord(doc.error) && typeof doc.error.code === "string") {
+    want = exitFor(doc.error.code);
+    what = `"${doc.error.code}"`;
+  }
+  if (want !== undefined && !run.timedOut && !run.signal && run.code !== want) problems.push(`${exit(run)}, want exit ${want} for ${what}`);
+  const summary = doc.ok === true ? `${String(doc.schema)}, exit 0` : `error ${isRecord(doc.error) ? String(doc.error.code) : "?"}, ${exit(run)}`;
+  return { check: result(id, rule, problems, warnings, summary), doc };
+}
+
+/**
+ * C1, C3 and C4: the shared commands. `commands --json` is the commands envelope with valid verbs;
+ * `status --json`, `tui --json` and `doctor --json` print valid envelopes with matching exit codes;
+ * `tui --json` should equal `status --json` apart from `generatedAt` (a difference warns). A CLI whose
+ * `commands --json` answers with a usage error has not adopted the shared commands yet, and the checks skip.
+ */
+export function checkShared(shared: SharedRuns | undefined): CheckResult[] {
+  const listed = shared ? sharedVerbs(shared.commands) : undefined;
+  if (!shared || !listed?.adopted) {
+    const why = shared ? `\`commands --json\` answered with a usage error (${exit(shared.commands)})` : "not captured";
+    return [{ id: "shared commands", rule: "C1", status: "skip", detail: `${why}; these checks run once the CLI has the shared commands` }];
+  }
+  const commandsDoc = parseJson(shared.commands.stdout);
+  const commands = isRecord(commandsDoc) ? checkCommands(commandsDoc, "commands --json") : undefined;
+  const product = commands?.product;
+  const commandProblems = commands ? findingProblems(commands.findings) : [notJson(shared.commands)];
+  if (shared.commands.code !== 0 || shared.commands.timedOut || shared.commands.signal) commandProblems.unshift(`${exit(shared.commands)}, want exit 0`);
+  const verbs = commands?.verbs ?? new Set<string>();
+  const results: CheckResult[] = [result("commands --json", "C1", commandProblems, oneLine(shared.commands), `${verbs.size} verbs${product ? ` for ${product}` : ""}, exit 0`)];
+
+  let statusDoc: unknown;
+  if (shared.status) {
+    const status = envelopeRun("status --json", "C4", shared.status, product);
+    statusDoc = status.doc;
+    results.push(status.check);
+  } else {
+    results.push({ id: "status --json", rule: "C4", status: "fail", detail: "not run: `commands --json` lists no read `status` verb" });
+  }
+  for (const verb of ["tui", "doctor"] as const) {
+    const run = shared[verb];
+    const rule = verb === "tui" ? "C3" : "C4";
+    if (!run) {
+      const detail = verbs.has(verb) ? `not run: \`commands --json\` lists ${verb} with an op class other than read` : `\`commands --json\` lists no ${verb} verb; every product has ${verb}`;
+      results.push({ id: `${verb} --json`, rule, status: "warn", detail });
+      continue;
+    }
+    const differs = verb === "tui" && isRecord(statusDoc) && isRecord(parseJson(run.stdout))
+      && checkTuiMatchesStatus(parseJson(run.stdout), statusDoc, "tui --json", "status --json").length > 0;
+    results.push(envelopeRun(`${verb} --json`, rule, run, product, differs ? ["differs from status --json apart from generatedAt; load both from one function"] : []).check);
+  }
+  return results;
 }
 
 /** D6: output that is not a terminal carries no escape sequences. */
@@ -249,8 +429,14 @@ export function evaluate(runs: GoldenRuns, config?: CopyConfig): { results: Chec
   for (const item of runs.commands) results.push(checkCommandHelp(item.command, item.flag, item.topic));
   results.push(...checkVersion(runs.name, runs.version, runs.versionJson));
   results.push(checkUnknown(runs.unknown, runs.unknownText));
-  results.push(checkJsonError("--json error", runs.unknownJson));
-  results.push(checkJsonError("agent error", runs.unknownAgent));
+  const listed = runs.shared ? sharedVerbs(runs.shared.commands) : undefined;
+  const commandsDoc = listed?.adopted ? parseJson(runs.shared!.commands.stdout) : undefined;
+  const context: SharedContext = {
+    adopted: listed?.adopted ?? false,
+    product: isRecord(commandsDoc) ? checkCommands(commandsDoc, "commands --json").product : undefined,
+  };
+  results.push(checkJsonError("--json error", runs.unknownJson, context));
+  results.push(checkJsonError("agent error", runs.unknownAgent, context));
   results.push(checkNoColor(runs.ttyNoColor));
   const pipes = [runs.bare, runs.help, ...runs.commands.map(item => item.flag), runs.version, runs.unknownText];
   results.push(checkNonTty(pipes));
@@ -262,5 +448,6 @@ export function evaluate(runs: GoldenRuns, config?: CopyConfig): { results: Chec
     ...runs.commands.map(item => ({ kind: "command" as const, location: `${item.command} --help`, text: item.flag.stdout })),
   ], config);
   results.push(copy.result);
+  if (runs.shared !== undefined) results.push(...checkShared(runs.shared));
   return { results, findings: copy.findings };
 }
