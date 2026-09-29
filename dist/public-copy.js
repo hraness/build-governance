@@ -1541,7 +1541,7 @@ function selectJsonPath(value, path) {
 }
 // src/public-copy/files.ts
 import { spawnSync } from "child_process";
-import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
 import { join, relative, resolve } from "path";
 
 // src/public-copy/cli-help.ts
@@ -1948,7 +1948,7 @@ function envelopeProblems(value, product) {
     const code = error.code;
     if (typeof code !== "string" || !ENVELOPE_CODE.test(code)) {
       problems.push("error.code must be a shared code or <product>.<code>");
-    } else if (!(code in SHARED_ERROR_CODES)) {
+    } else if (!Object.hasOwn(SHARED_ERROR_CODES, code)) {
       if (!PRODUCT_CODE.test(code))
         problems.push(`error.code "${code}" is not a shared code; a product code needs its prefix, as in ${product ?? "example"}.${code}`);
       else if (product && !code.startsWith(`${product}.`))
@@ -2024,7 +2024,7 @@ function checkCommands(value, location) {
     const first = path[0] ?? "";
     if (first === "commands")
       fail(name, "`commands` is built in. Do not register it as a verb.");
-    if (RETIRED_VERBS.includes(first)) {
+    if (path.some((segment) => RETIRED_VERBS.includes(segment))) {
       fail(name, "Menu bar and tray companions were retired in desktop-foundation 1.0. Offer `tui` and `status --json` instead.");
     }
     const opClass = verb.opClass;
@@ -2094,6 +2094,7 @@ var TRAY_SOURCE_EXTENSIONS = [
   ".swift",
   ".m",
   ".mm",
+  ".go",
   ".sh",
   ".py",
   ".plist",
@@ -2109,8 +2110,13 @@ var TRAY_PATTERNS = [
   { pattern: /\bserveCompanion\s*\(|\bimport\s*\{[^}]*\bserveCompanion\b/, what: "serveCompanion, the retired tray entry point" },
   { pattern: /\bhraness-companion["'`,\s[\]]+(?:--state-dir|--check-protocol|--foreground|lint-menu)\b/, what: "a hraness-companion tray mode" },
   { pattern: /\bcompanion["'`,\s[\]]+lint-menu\b/, what: "the retired companion lint-menu" },
-  { pattern: /\bTrayIconBuilder\b|\btray-icon\b|\bSystemTray\b|"trayIcon"\s*:/, what: "a Tauri tray icon", extensions: [".rs", ".toml", ".json", ...SCRIPT] },
-  { pattern: /\bNSStatusBar\b|\bNSStatusItem\b|\bMenuBarExtra\b/, what: "a macOS menu bar item", extensions: [".swift", ".m", ".mm", ".rs"] }
+  { pattern: /\bTrayIconBuilder\b|\bSystemTray(?:Event|Menu)?::|\btray_icon::/, what: "a Tauri tray icon", extensions: [".rs", ...SCRIPT] },
+  { pattern: /["']tray-icon["']|\btray-icon\s*=/, what: "a Tauri tray icon", extensions: [".toml"] },
+  { pattern: /"trayIcon"\s*:|"systemTray"\s*:/, what: "a Tauri tray icon", extensions: [".json"] },
+  { pattern: /\bnew\s+Tray\s*\(|(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(?\s*)["']menubar["']/, what: "an Electron tray or the menubar package", extensions: SCRIPT },
+  { pattern: /\bNSStatusBar\b|\bNSStatusItem\b|\bMenuBarExtra\b/, what: "a macOS menu bar item", extensions: [".swift", ".m", ".mm", ".rs"] },
+  { pattern: /^\s*(?:import|from)\s+(?:rumps|pystray)\b/, what: "a Python menu bar app", extensions: [".py"] },
+  { pattern: /["'][^"'\n]*\/systray["']|\bsystray\.(?:Run|Register)\b/, what: "a Go system tray", extensions: [".go"] }
 ];
 var TRAY_ALLOW_MARKER = "tray-guard: retiring";
 var TRAY_ALLOW = /tray-guard: retiring\b/;
@@ -2119,7 +2125,10 @@ function trayPathFindings(file2, seen = new Set) {
   const path = file2.replaceAll("\\", "/");
   const segments = path.split("/");
   const base = segments.at(-1) ?? "";
-  const index = segments.slice(0, -1).findIndex((segment) => /^(menubar|menu-bar|tray)$/i.test(segment));
+  const lower = base.toLowerCase();
+  if (!TRAY_SOURCE_EXTENSIONS.some((extension) => lower.endsWith(extension)))
+    return [];
+  const index = segments.slice(0, -1).findIndex((segment) => /^(menubar|menu-bar|menu_bar|tray|statusbar|status-bar)$/i.test(segment));
   if (index >= 0) {
     const directory = `${segments.slice(0, index + 1).join("/")}/`;
     if (seen.has(directory))
@@ -2127,11 +2136,11 @@ function trayPathFindings(file2, seen = new Set) {
     seen.add(directory);
     return [{ rule: "tray", severity: "error", surface: "reference", location: directory, excerpt: `a menu bar directory: ${directory}`, hint: HINT }];
   }
-  const source = TRAY_SOURCE_EXTENSIONS.some((extension) => base.toLowerCase().endsWith(extension) && extension !== ".json");
-  if (!source || !/^(menubar|menu-bar|tray)([-._]|$)/i.test(base))
+  if (lower.endsWith(".json") || !TRAY_NAME.test(base))
     return [];
   return [{ rule: "tray", severity: "error", surface: "reference", location: path, excerpt: `a menu bar source file: ${path}`, hint: HINT }];
 }
+var TRAY_NAME = /^(?:(?:menubar|menu-bar|menu_bar|tray)(?=[-._]|$)|(?:[Mm]enu[Bb]ar|[Tt]ray|[Ss]tatus[Bb]ar)(?=(?:Icon|Menu|Item|Controller|App|View|Manager|State|Window)?[-._]))/;
 function trayTextFindings(text, file2) {
   const lower = file2.toLowerCase();
   const extension = TRAY_SOURCE_EXTENSIONS.find((item) => lower.endsWith(item));
@@ -2165,7 +2174,7 @@ function trayTextFindings(text, file2) {
 function trayHelpFindings(text, file2) {
   const findings = [];
   text.split(/\r?\n/).forEach((line, index) => {
-    if (/^\s+(?:[a-z][a-z0-9-]*\s+)?(menubar|menu-bar|tray)\b(?:\s{2,}|$)/.test(line)) {
+    if (/^\s+(?:[a-z][a-z0-9-]*\s+)?(menubar|menu-bar|tray|companion)\b(?:\s{2,}|$)/.test(line)) {
       findings.push({ rule: "tray", severity: "error", surface: "reference", location: `${file2}:${index + 1}`, excerpt: line.trim(), hint: HINT });
     }
   });
@@ -2217,17 +2226,32 @@ function read(root, file2) {
 }
 var COPY_SECTIONS = ["markdown", "html", "text", "json", "package", "guides", "cli", "control", "tray"];
 var TRAY_ALWAYS_EXCLUDED = ["**/target/**", "**/.venv/**", "**/vendor/**"];
+function trayScanRoot(root) {
+  const git = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: root, encoding: "utf8" });
+  const top = git.status === 0 ? git.stdout.trim() : "";
+  return realpathSync(top || root);
+}
+var TRAY_MAX_BYTES = 2 * 1024 * 1024;
 function trackedFiles(root, exclude) {
   const skip = [...ALWAYS_EXCLUDED, ...TRAY_ALWAYS_EXCLUDED, ...exclude].map((pattern) => new Bun.Glob(pattern));
   const git = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."], { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   const listed = git.status === 0 ? git.stdout.split("\x00").filter(Boolean) : [...new Bun.Glob("**/*").scanSync({ cwd: root, onlyFiles: true, dot: true })];
-  return listed.map((file2) => file2.replaceAll("\\", "/")).filter((file2) => !skip.some((glob) => glob.match(file2)) && isFile(join(root, file2))).sort();
+  const files = [];
+  for (const file2 of listed.map((item) => item.replaceAll("\\", "/")).sort()) {
+    if (skip.some((glob) => glob.match(file2)))
+      continue;
+    const size = fileSize(join(root, file2));
+    if (size !== undefined)
+      files.push({ file: file2, size });
+  }
+  return files;
 }
-function isFile(path) {
+function fileSize(path) {
   try {
-    return statSync(path).isFile();
+    const stat = statSync(path);
+    return stat.isFile() ? stat.size : undefined;
   } catch {
-    return false;
+    return;
   }
 }
 function readJson(root, file2, label) {
@@ -2370,15 +2394,20 @@ function runPublicCopy(root, config, options = {}) {
   }
   const trayFiles = [];
   if (on("tray") && config.tray) {
-    const trayExclude = [...exclude, ...config.tray === true ? [] : config.tray.exclude ?? []];
+    const scanRoot = trayScanRoot(root);
+    const prefix = relative(scanRoot, realpathSync(resolve(root))).replaceAll("\\", "/");
+    const rootExclude = prefix ? exclude.map((glob) => `${prefix}/${glob}`) : [...exclude];
+    const trayExclude = [...rootExclude, ...config.tray === true ? [] : config.tray.exclude ?? []];
     const trayDirectories = new Set;
-    for (const file2 of trackedFiles(root, trayExclude)) {
+    for (const { file: file2, size } of trackedFiles(scanRoot, trayExclude)) {
       const pathFindings = trayPathFindings(file2, trayDirectories);
       findings.push(...pathFindings);
-      const text = readFileSync(join(root, file2));
-      if (text.length > 2 * 1024 * 1024 || text.includes(0))
-        continue;
-      const textFindings = trayTextFindings(text.toString("utf8"), file2);
+      let textFindings = [];
+      if (size <= TRAY_MAX_BYTES) {
+        const text = readFileSync(join(scanRoot, file2));
+        if (!text.includes(0))
+          textFindings = trayTextFindings(text.toString("utf8"), file2);
+      }
       findings.push(...textFindings);
       if (pathFindings.length || textFindings.length)
         trayFiles.push(file2);

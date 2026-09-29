@@ -129,6 +129,24 @@ describe("runPublicCopy control and tray", () => {
     expect(result.files).toEqual(["src/cli.ts", "src/menubar.ts"]);
   });
 
+  test("scans the whole Git repository from a subdirectory, with root excludes rebased", () => {
+    const root = fixture("tray-subdir", {
+      "app/src/main.ts": 'import x from "@hraness/desktop-foundation/menu-kit";\n',
+      "app/src/skip.ts": 'import x from "@hraness/desktop-foundation/menu-kit";\n',
+      "fixtures/ux/help.txt": "Usage: x\n",
+      "fixtures/ux/old/menubar.ts": "x\n",
+    });
+    Bun.spawnSync(["git", "init", "-q"], { cwd: root });
+    const result = runPublicCopy(join(root, "fixtures", "ux"), { tray: { exclude: ["app/src/skip.ts"] }, exclude: ["old/**"], guides: false });
+    expect(result.findings.map(f => f.location)).toEqual(["app/src/main.ts:1"]);
+  });
+
+  test("checks large and binary files by path only", () => {
+    const big = `// ${"x".repeat(2 * 1024 * 1024)}\nimport x from "@hraness/desktop-foundation/menu-kit";\n`;
+    const root = fixture("tray-large", { "src/big.ts": big, "src/bin.js": 'import x from "menu-kit";\u0000', "src/menubar.ts": `\u0000${big}` });
+    expect(runPublicCopy(root, { tray: true, guides: false }).findings.map(f => f.location)).toEqual(["src/menubar.ts"]);
+  });
+
   test("the CLI rejects the removed menu options", () => {
     expect(run(scratch, "--menu-kit", "x").out).toContain("--menu-kit was removed");
     const root = fixture("menus-config", { "public-copy.config.json": JSON.stringify({ menus: { fixtures: ["a.json"] } }) });

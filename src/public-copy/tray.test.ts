@@ -17,8 +17,15 @@ describe("trayPathFindings", () => {
     expect(trayPathFindings("src/tray/index.ts", seen).map(finding => finding.location)).toEqual(["src/tray/"]);
   });
 
-  test("leaves similar names alone", () => {
-    for (const path of ["src/menu.ts", "src/trays-of-food.md", "docs/menubar.md", "src/menubarRetire.ts", "fixtures/menubar.json", "src/ashtray.ts", "src/retire-menubar.ts"]) {
+  test("flags camelCase and PascalCase menu bar files", () => {
+    for (const path of ["src/trayIcon.ts", "Sources/TrayMenu.swift", "Sources/StatusBarController.swift", "src/MenuBarApp.tsx", "cmd/tray.go"]) {
+      expect({ path, found: trayPathFindings(path).length }).toEqual({ path, found: 1 });
+    }
+  });
+
+  test("leaves similar names, docs and images alone", () => {
+    for (const path of ["src/menu.ts", "src/trays-of-food.md", "docs/menubar.md", "src/menubarRetire.ts", "fixtures/menubar.json", "src/ashtray.ts", "src/retire-menubar.ts",
+      "assets/tray/icon.png", "docs/tray/old.md", "src/traySize.ts", "src/Trays.ts"]) {
       expect({ path, found: trayPathFindings(path).length }).toEqual({ path, found: 0 });
     }
   });
@@ -44,6 +51,20 @@ describe("trayTextFindings", () => {
     expect(excerpts("for (const name of ['serveCompanion']) assert(!(name in sdk));", "test/a.ts")).toEqual([]);
     expect(excerpts("bunx companion lint-menu --strict", "scripts/lint.sh")).toEqual(["the retired companion lint-menu"]);
     expect(excerpts("hraness-helper status --json", "bin/run.sh")).toEqual([]);
+  });
+
+  test("flags Electron, the menubar package, Python and Go trays", () => {
+    expect(excerpts("const tray = new Tray(icon);", "src/main.ts")).toEqual(["an Electron tray or the menubar package"]);
+    expect(excerpts('import { menubar } from "menubar";', "src/main.ts")).toEqual(["an Electron tray or the menubar package"]);
+    expect(excerpts('const { menubar } = require("menubar");', "src/main.cjs")).toEqual(["an Electron tray or the menubar package"]);
+    expect(excerpts("let icon = tray_icon::TrayIcon::new(attrs)?;", "src/main.rs")).toEqual(["a Tauri tray icon"]);
+    expect(excerpts("SystemTray::new().with_menu(menu)", "src/main.rs")).toEqual(["a Tauri tray icon"]);
+    expect(excerpts("import rumps", "app.py")).toEqual(["a Python menu bar app"]);
+    expect(excerpts("from pystray import Icon", "app.py")).toEqual(["a Python menu bar app"]);
+    expect(excerpts('import "github.com/getlantern/systray"', "main.go")).toEqual(["a Go system tray"]);
+    expect(excerpts("\tsystray.Run(onReady, onExit)", "main.go")).toEqual(["a Go system tray"]);
+    expect(excerpts('<span className="tray-icon" />', "src/a.tsx")).toEqual([]);
+    expect(excerpts("const trayIconSize = 16;", "src/a.ts")).toEqual([]);
   });
 
   test("flags Tauri and macOS tray APIs in the languages that use them", () => {
@@ -79,5 +100,6 @@ describe("trayHelpFindings", () => {
     const help = "Usage: demo <command>\n\nCommands\n  status     See what Demo is doing\n  menubar    Show Demo in the menu bar\n  ui tray\n";
     expect(trayHelpFindings(help, "help.txt").map(finding => finding.location)).toEqual(["help.txt:5", "help.txt:6"]);
     expect(trayHelpFindings("  status   Shows what is in the tray today\n", "help.txt")).toEqual([]);
+    expect(trayHelpFindings("  companion   Start the companion\n", "help.txt")).toHaveLength(1);
   });
 });

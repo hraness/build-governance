@@ -8,7 +8,7 @@ import type { CopyFinding } from "./types.js";
 /** File extensions whose text the guard reads. Docs and changelogs may still describe the old tray. */
 export const TRAY_SOURCE_EXTENSIONS = [
   ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs",
-  ".rs", ".swift", ".m", ".mm", ".sh", ".py", ".plist", ".toml", ".yml", ".yaml", ".json",
+  ".rs", ".swift", ".m", ".mm", ".go", ".sh", ".py", ".plist", ".toml", ".yml", ".yaml", ".json",
 ] as const;
 
 const HINT = "Menu bars were retired in desktop-foundation 1.0. Give each former menu item a CLI verb with --json, and use `tui` to watch the product.";
@@ -28,8 +28,13 @@ export const TRAY_PATTERNS: readonly TrayPattern[] = [
   { pattern: /\bserveCompanion\s*\(|\bimport\s*\{[^}]*\bserveCompanion\b/, what: "serveCompanion, the retired tray entry point" },
   { pattern: /\bhraness-companion["'`,\s[\]]+(?:--state-dir|--check-protocol|--foreground|lint-menu)\b/, what: "a hraness-companion tray mode" },
   { pattern: /\bcompanion["'`,\s[\]]+lint-menu\b/, what: "the retired companion lint-menu" },
-  { pattern: /\bTrayIconBuilder\b|\btray-icon\b|\bSystemTray\b|"trayIcon"\s*:/, what: "a Tauri tray icon", extensions: [".rs", ".toml", ".json", ...SCRIPT] },
+  { pattern: /\bTrayIconBuilder\b|\bSystemTray(?:Event|Menu)?::|\btray_icon::/, what: "a Tauri tray icon", extensions: [".rs", ...SCRIPT] },
+  { pattern: /["']tray-icon["']|\btray-icon\s*=/, what: "a Tauri tray icon", extensions: [".toml"] },
+  { pattern: /"trayIcon"\s*:|"systemTray"\s*:/, what: "a Tauri tray icon", extensions: [".json"] },
+  { pattern: /\bnew\s+Tray\s*\(|(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(?\s*)["']menubar["']/, what: "an Electron tray or the menubar package", extensions: SCRIPT },
   { pattern: /\bNSStatusBar\b|\bNSStatusItem\b|\bMenuBarExtra\b/, what: "a macOS menu bar item", extensions: [".swift", ".m", ".mm", ".rs"] },
+  { pattern: /^\s*(?:import|from)\s+(?:rumps|pystray)\b/, what: "a Python menu bar app", extensions: [".py"] },
+  { pattern: /["'][^"'\n]*\/systray["']|\bsystray\.(?:Run|Register)\b/, what: "a Go system tray", extensions: [".go"] },
 ];
 
 /**
@@ -49,17 +54,21 @@ export function trayPathFindings(file: string, seen: Set<string> = new Set()): C
   const path = file.replaceAll("\\", "/");
   const segments = path.split("/");
   const base = segments.at(-1) ?? "";
-  const index = segments.slice(0, -1).findIndex(segment => /^(menubar|menu-bar|tray)$/i.test(segment));
+  const lower = base.toLowerCase();
+  if (!TRAY_SOURCE_EXTENSIONS.some(extension => lower.endsWith(extension))) return [];
+  const index = segments.slice(0, -1).findIndex(segment => /^(menubar|menu-bar|menu_bar|tray|statusbar|status-bar)$/i.test(segment));
   if (index >= 0) {
     const directory = `${segments.slice(0, index + 1).join("/")}/`;
     if (seen.has(directory)) return [];
     seen.add(directory);
     return [{ rule: "tray", severity: "error", surface: "reference", location: directory, excerpt: `a menu bar directory: ${directory}`, hint: HINT }];
   }
-  const source = TRAY_SOURCE_EXTENSIONS.some(extension => base.toLowerCase().endsWith(extension) && extension !== ".json");
-  if (!source || !/^(menubar|menu-bar|tray)([-._]|$)/i.test(base)) return [];
+  if (lower.endsWith(".json") || !TRAY_NAME.test(base)) return [];
   return [{ rule: "tray", severity: "error", surface: "reference", location: path, excerpt: `a menu bar source file: ${path}`, hint: HINT }];
 }
+
+/** `menubar.ts`, `menu-bar-state.ts`, `trayIcon.ts`, `TrayMenu.swift`, `StatusBarController.swift`, but not `trays.ts` or `menubarRetire.ts`. */
+const TRAY_NAME = /^(?:(?:menubar|menu-bar|menu_bar|tray)(?=[-._]|$)|(?:[Mm]enu[Bb]ar|[Tt]ray|[Ss]tatus[Bb]ar)(?=(?:Icon|Menu|Item|Controller|App|View|Manager|State|Window)?[-._]))/;
 
 /** Lines in one source file that bring back a menu bar or tray. */
 export function trayTextFindings(text: string, file: string): CopyFinding[] {
@@ -87,7 +96,7 @@ export function trayTextFindings(text: string, file: string): CopyFinding[] {
 export function trayHelpFindings(text: string, file: string): CopyFinding[] {
   const findings: CopyFinding[] = [];
   text.split(/\r?\n/).forEach((line, index) => {
-    if (/^\s+(?:[a-z][a-z0-9-]*\s+)?(menubar|menu-bar|tray)\b(?:\s{2,}|$)/.test(line)) {
+    if (/^\s+(?:[a-z][a-z0-9-]*\s+)?(menubar|menu-bar|tray|companion)\b(?:\s{2,}|$)/.test(line)) {
       findings.push({ rule: "tray", severity: "error", surface: "reference", location: `${file}:${index + 1}`, excerpt: line.trim(), hint: HINT });
     }
   });

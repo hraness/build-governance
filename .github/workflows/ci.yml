@@ -91,6 +91,12 @@ jobs:
       status-json: control/status.json
       tui-json: control/tui.json
       envelopes: control/errors/*.json
+      # The guard's own patterns, tests and bundles name what it looks for.
+      tray-exclude: |
+        src/public-copy/tray.ts
+        src/public-copy/tray.test.ts
+        src/public-copy/files.test.ts
+        dist/**
       proper-nouns: Demo
       mode: required
       use-checkout: true

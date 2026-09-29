@@ -3,7 +3,7 @@
  * The rules themselves live in modules without I/O.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseBaseline, serializeBaseline } from "./baseline.js";
 import type { CopyCounts } from "./baseline.js";
@@ -84,21 +84,43 @@ export interface RunPublicCopyOptions {
 /** Paths the tray guard never reads: dependencies, build output of other tools, and VCS data. */
 export const TRAY_ALWAYS_EXCLUDED = ["**/target/**", "**/.venv/**", "**/vendor/**"];
 
-/** Tracked files under `root` (from git when it is a repository, else every file), minus the exclusions. */
-function trackedFiles(root: string, exclude: readonly string[]): string[] {
+/**
+ * The directory the tray guard scans: the top of the Git repository that holds `root`, so a lint run from
+ * a subdirectory (such as the folder of captured CLI output) still covers the whole repository. Outside Git
+ * it is `root`.
+ */
+export function trayScanRoot(root: string): string {
+  const git = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: root, encoding: "utf8" });
+  const top = git.status === 0 ? git.stdout.trim() : "";
+  return realpathSync(top || root);
+}
+
+/** Files the guard reads: under 2 MiB and not binary. Larger files are still checked by path. */
+const TRAY_MAX_BYTES = 2 * 1024 * 1024;
+
+/** Tracked files under `root` (from git when it is a repository, else every file), minus the exclusions, with their sizes. */
+function trackedFiles(root: string, exclude: readonly string[]): { file: string; size: number }[] {
   const skip = [...ALWAYS_EXCLUDED, ...TRAY_ALWAYS_EXCLUDED, ...exclude].map(pattern => new Bun.Glob(pattern));
   const git = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."], { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   const listed = git.status === 0
     ? git.stdout.split("\0").filter(Boolean)
     : [...new Bun.Glob("**/*").scanSync({ cwd: root, onlyFiles: true, dot: true })];
-  return listed.map(file => file.replaceAll("\\", "/")).filter(file => !skip.some(glob => glob.match(file)) && isFile(join(root, file))).sort();
+  const files: { file: string; size: number }[] = [];
+  for (const file of listed.map(item => item.replaceAll("\\", "/")).sort()) {
+    if (skip.some(glob => glob.match(file))) continue;
+    const size = fileSize(join(root, file));
+    if (size !== undefined) files.push({ file, size });
+  }
+  return files;
 }
 
-function isFile(path: string): boolean {
+/** The size of a regular file (following symlinks), or undefined for a directory, a broken link or a missing file. */
+function fileSize(path: string): number | undefined {
   try {
-    return statSync(path).isFile();
+    const stat = statSync(path);
+    return stat.isFile() ? stat.size : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -231,14 +253,20 @@ export function runPublicCopy(root: string, config: CopyConfig, options: RunPubl
 
   const trayFiles: string[] = [];
   if (on("tray") && config.tray) {
-    const trayExclude = [...exclude, ...(config.tray === true ? [] : config.tray.exclude ?? [])];
+    const scanRoot = trayScanRoot(root);
+    const prefix = relative(scanRoot, realpathSync(resolve(root))).replaceAll("\\", "/");
+    // `exclude` is relative to the root; the tray's own exclusions are relative to the repository top.
+    const rootExclude = prefix ? exclude.map(glob => `${prefix}/${glob}`) : [...exclude];
+    const trayExclude = [...rootExclude, ...(config.tray === true ? [] : config.tray.exclude ?? [])];
     const trayDirectories = new Set<string>();
-    for (const file of trackedFiles(root, trayExclude)) {
+    for (const { file, size } of trackedFiles(scanRoot, trayExclude)) {
       const pathFindings = trayPathFindings(file, trayDirectories);
       findings.push(...pathFindings);
-      const text = readFileSync(join(root, file));
-      if (text.length > 2 * 1024 * 1024 || text.includes(0)) continue;
-      const textFindings = trayTextFindings(text.toString("utf8"), file);
+      let textFindings: CopyFinding[] = [];
+      if (size <= TRAY_MAX_BYTES) {
+        const text = readFileSync(join(scanRoot, file));
+        if (!text.includes(0)) textFindings = trayTextFindings(text.toString("utf8"), file);
+      }
       findings.push(...textFindings);
       if (pathFindings.length || textFindings.length) trayFiles.push(file);
     }

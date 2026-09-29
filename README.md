@@ -81,7 +81,7 @@ Every field is optional, and an unknown field is an error.
 | `guides` | `true` (default) checks the synced guides when they exist, `"required"` also fails when they are missing, and `false` skips the check. |
 | `cli` | Captured CLI output: `[{ "files": "test/golden/bare.txt", "kind": "bare" }]`. `kind` is `bare` (the command run with no arguments), `help` (root `--help`), or `command` (one command's `--help`). `files` is a file or a glob. |
 | `control` | Captured `--json` output: `commands` (the output of `<product> commands --json`), `status` (`status --json`), `tui` (`tui --json`, which needs `status`), and `envelopes` (globs of other captured output, such as errors). |
-| `tray` | `true` fails on menu bar or tray code anywhere in the repository. `{ "exclude": ["docs/history/**"] }` does the same and skips those globs. |
+| `tray` | `true` fails on menu bar or tray code anywhere in the repository. `{ "exclude": ["src/legacy/**"] }` does the same and skips those globs. |
 | `properNouns` | Names that CLI help may capitalize mid-sentence, such as `Mom` in a fixture. |
 
 ### Rules
@@ -102,7 +102,7 @@ Every field is optional, and an unknown field is an error.
 | `cli-case` | A capitalized word in the middle of a help heading or command summary, such as `Getting Started` or `Turn On replies`. Names in `properNouns`, the brand, macOS and app names, key names, mixed-case names, capitals, commands, flags, quotes, and placeholders pass. | Error |
 | `cli-jargon` | Internal words in help text (`admission`, `qualification`, `custody`, `receipt`, `lane`, `gate`, `surface`, `projection`, `habitat`, `organism`, and `vocabulary.add`) unless the same line explains them, as in `lane (the queue a chat waits in)` | Error; warning for `pin` and the other internal words |
 | `control` | Captured `--json` output that breaks desktop-foundation's envelope schema, an unknown error code or another product's prefix, a `human-required` error with no step for a person, a `commands --json` verb with no op class, a `read` or `operate` verb that asks for a person or a `decide` verb that does not, a shared verb (`status`, `tui`, `doctor`, `control`, `approvals`, `permissions`) with the wrong op class, no `status` verb, and `tui --json` that differs from `status --json` in anything but `generatedAt` | Error |
-| `tray` | Menu bar code: a `menubar`, `menu-bar` or `tray` directory or source file, an import of desktop-foundation's `menu-kit`, `serveCompanion`, a `hraness-companion` tray mode (`--state-dir`, `--check-protocol`, `--foreground`), `companion lint-menu`, Tauri and macOS tray APIs, and a `menubar` or `tray` command in captured help | Error |
+| `tray` | Menu bar code: a `menubar`, `menu-bar`, `tray` or `statusbar` directory holding source files, a source file with such a name (`menubar.ts`, `trayIcon.ts`, `StatusBarController.swift`), an import of desktop-foundation's `menu-kit`, `serveCompanion`, a `hraness-companion` tray mode (`--state-dir`, `--check-protocol`, `--foreground`), `companion lint-menu`, Tauri, Electron, macOS, Python (`rumps`, `pystray`) and Go (`systray`) tray APIs, the `menubar` npm package, and a `menubar`, `tray` or `companion` command in captured help | Error |
 
 The word lists ship with the package, so a new entry reaches every repository on its next version bump.
 
@@ -128,7 +128,7 @@ Products with a command line add their captured help and `--json` output to the 
 }
 ```
 
-Menu bars were retired in desktop-foundation 1.0, so `tray` fails when one comes back. It reads the files Git tracks, or every file outside a Git repository, and skips `node_modules`, `.git`, `target`, `.venv`, `vendor`, and `exclude`. Code that retires an old menu bar, such as a check for a leftover login item, marks the line with a `tray-guard: retiring` comment, on the same line or alone on the line above.
+Menu bars were retired in desktop-foundation 1.0, so `tray` fails when one comes back. It scans the whole Git repository that holds `--root`, even when the lint runs from a subdirectory, and reads the files Git tracks or would track (every file outside a Git repository). It skips `node_modules`, `.git`, `target`, `.venv`, `vendor`, `exclude`, and `tray.exclude`, whose globs are relative to the top of the repository. Files over 2 MiB and binary files are checked by name only. Code that retires an old menu bar, such as a check for a leftover login item, marks the line with a `tray-guard: retiring` comment, on the same line or alone on the line above.
 
 The `menus` section and `--menu-kit` were removed in 0.5.0. A config that still has `menus` fails with a message that says what replaced it.
 

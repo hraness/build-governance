@@ -37,6 +37,8 @@ describe("envelopeProblems", () => {
     expect(envelopeProblems(error("locked"), "example").join()).toContain("example.locked");
     expect(envelopeProblems(error("other.locked"), "example").join()).toContain("another product's prefix");
     expect(envelopeProblems(error("Bad Code")).join()).toContain("error.code");
+    expect(envelopeProblems(error("constructor")).join()).toContain("constructor");
+    expect(envelopeProblems(error("toString")).join()).toContain("error.code must be");
   });
 
   test("needs a human next step on human-required", () => {
@@ -90,9 +92,10 @@ describe("checkCommands", () => {
       { path: ["menubar"], opClass: "operate", schema: "example.menubar/1", summary: "Show the menu bar" },
       { path: ["tray", "start"], opClass: "operate", schema: "example.tray/1", summary: "Start the tray" },
       { path: ["commands"], opClass: "read", schema: "hraness.commands/1", summary: "List" },
+      { path: ["control", "menubar"], opClass: "operate", schema: "example.menubar/1", summary: "Show it" },
       status,
     ]), "c.json").findings.map(finding => finding.excerpt);
-    expect(excerpts).toEqual(["menubar", "tray start", "commands", "status is listed twice"]);
+    expect(excerpts).toEqual(["menubar", "tray start", "commands", "control menubar", "status is listed twice"]);
   });
 
   test("checks the envelope, the schema, the product and the descriptors", () => {

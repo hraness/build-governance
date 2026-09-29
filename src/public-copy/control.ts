@@ -118,7 +118,7 @@ export function envelopeProblems(value: unknown, product?: string): string[] {
     const code = error.code;
     if (typeof code !== "string" || !ENVELOPE_CODE.test(code)) {
       problems.push("error.code must be a shared code or <product>.<code>");
-    } else if (!(code in SHARED_ERROR_CODES)) {
+    } else if (!Object.hasOwn(SHARED_ERROR_CODES, code)) {
       if (!PRODUCT_CODE.test(code)) problems.push(`error.code "${code}" is not a shared code; a product code needs its prefix, as in ${product ?? "example"}.${code}`);
       else if (product && !code.startsWith(`${product}.`)) problems.push(`error.code "${code}" uses another product's prefix; use ${product}.`);
     }
@@ -203,7 +203,7 @@ export function checkCommands(value: unknown, location: string): CommandsCheck {
     verbs.add(name);
     const first = (path as string[])[0] ?? "";
     if (first === "commands") fail(name, "`commands` is built in. Do not register it as a verb.");
-    if ((RETIRED_VERBS as readonly string[]).includes(first)) {
+    if ((path as string[]).some(segment => (RETIRED_VERBS as readonly string[]).includes(segment))) {
       fail(name, "Menu bar and tray companions were retired in desktop-foundation 1.0. Offer `tui` and `status --json` instead.");
     }
     const opClass = verb.opClass;
