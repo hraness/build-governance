@@ -95,6 +95,11 @@ export function trayScanRoot(root: string): string {
   return realpathSync(top || root);
 }
 
+/** `prefix` as a literal glob: `fx[1]` matches only the directory named `fx[1]`. */
+export function escapeGlob(prefix: string): string {
+  return prefix.replace(/[\\*?[\]{}!]/g, character => `\\${character}`);
+}
+
 /** Files the guard reads: under 2 MiB and not binary. Larger files are still checked by path. */
 const TRAY_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -256,7 +261,7 @@ export function runPublicCopy(root: string, config: CopyConfig, options: RunPubl
     const scanRoot = trayScanRoot(root);
     const prefix = relative(scanRoot, realpathSync(resolve(root))).replaceAll("\\", "/");
     // `exclude` is relative to the root; the tray's own exclusions are relative to the repository top.
-    const rootExclude = prefix ? exclude.map(glob => `${prefix}/${glob}`) : [...exclude];
+    const rootExclude = prefix ? exclude.map(glob => `${escapeGlob(prefix)}/${glob}`) : [...exclude];
     const trayExclude = [...rootExclude, ...(config.tray === true ? [] : config.tray.exclude ?? [])];
     const trayDirectories = new Set<string>();
     for (const { file, size } of trackedFiles(scanRoot, trayExclude)) {

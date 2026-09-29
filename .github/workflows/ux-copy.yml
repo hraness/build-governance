@@ -43,7 +43,7 @@ on:
         type: string
         default: "true"
       tray-exclude:
-        description: "Globs the tray guard skips, one per line, such as code that retires an old login item"
+        description: "Globs the tray guard skips, one per line, relative to the repository root (not working-directory)"
         type: string
         default: ""
       proper-nouns:

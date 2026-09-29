@@ -2110,12 +2110,13 @@ var TRAY_PATTERNS = [
   { pattern: /\bserveCompanion\s*\(|\bimport\s*\{[^}]*\bserveCompanion\b/, what: "serveCompanion, the retired tray entry point" },
   { pattern: /\bhraness-companion["'`,\s[\]]+(?:--state-dir|--check-protocol|--foreground|lint-menu)\b/, what: "a hraness-companion tray mode" },
   { pattern: /\bcompanion["'`,\s[\]]+lint-menu\b/, what: "the retired companion lint-menu" },
-  { pattern: /\bTrayIconBuilder\b|\bSystemTray(?:Event|Menu)?::|\btray_icon::/, what: "a Tauri tray icon", extensions: [".rs", ...SCRIPT] },
+  { pattern: /\bTrayIconBuilder\b|\bSystemTray(?:Event|Menu|MenuItem)?\b|\btray_icon::/, what: "a Tauri tray icon", extensions: [".rs"] },
+  { pattern: /\bTrayIconBuilder\b|["']@tauri-apps\/api\/tray["']/, what: "a Tauri tray icon", extensions: SCRIPT },
   { pattern: /["']tray-icon["']|\btray-icon\s*=/, what: "a Tauri tray icon", extensions: [".toml"] },
   { pattern: /"trayIcon"\s*:|"systemTray"\s*:/, what: "a Tauri tray icon", extensions: [".json"] },
-  { pattern: /\bnew\s+Tray\s*\(|(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(?\s*)["']menubar["']/, what: "an Electron tray or the menubar package", extensions: SCRIPT },
+  { pattern: /\bnew\s+(?:[A-Za-z_$][\w$]*\.)?Tray\s*\(|(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(?\s*)["']menubar["']/, what: "an Electron tray or the menubar package", extensions: SCRIPT },
   { pattern: /\bNSStatusBar\b|\bNSStatusItem\b|\bMenuBarExtra\b/, what: "a macOS menu bar item", extensions: [".swift", ".m", ".mm", ".rs"] },
-  { pattern: /^\s*(?:import|from)\s+(?:rumps|pystray)\b/, what: "a Python menu bar app", extensions: [".py"] },
+  { pattern: /^\s*(?:import\s+(?:[\w.]+\s*,\s*)*|from\s+)(?:rumps|pystray)\b/, what: "a Python menu bar app", extensions: [".py"] },
   { pattern: /["'][^"'\n]*\/systray["']|\bsystray\.(?:Run|Register)\b/, what: "a Go system tray", extensions: [".go"] }
 ];
 var TRAY_ALLOW_MARKER = "tray-guard: retiring";
@@ -2128,7 +2129,7 @@ function trayPathFindings(file2, seen = new Set) {
   const lower = base.toLowerCase();
   if (!TRAY_SOURCE_EXTENSIONS.some((extension) => lower.endsWith(extension)))
     return [];
-  const index = segments.slice(0, -1).findIndex((segment) => /^(menubar|menu-bar|menu_bar|tray|statusbar|status-bar)$/i.test(segment));
+  const index = segments.slice(0, -1).findIndex((segment) => /^(menubar|menu-bar|menu_bar|tray)$/i.test(segment));
   if (index >= 0) {
     const directory = `${segments.slice(0, index + 1).join("/")}/`;
     if (seen.has(directory))
@@ -2136,11 +2137,12 @@ function trayPathFindings(file2, seen = new Set) {
     seen.add(directory);
     return [{ rule: "tray", severity: "error", surface: "reference", location: directory, excerpt: `a menu bar directory: ${directory}`, hint: HINT }];
   }
-  if (lower.endsWith(".json") || !TRAY_NAME.test(base))
+  const nativeTray = /^Tray\.(?:swift|m|mm|rs|go)$/.test(base);
+  if (lower.endsWith(".json") || !(TRAY_NAME.test(base) || nativeTray))
     return [];
   return [{ rule: "tray", severity: "error", surface: "reference", location: path, excerpt: `a menu bar source file: ${path}`, hint: HINT }];
 }
-var TRAY_NAME = /^(?:(?:menubar|menu-bar|menu_bar|tray)(?=[-._]|$)|(?:[Mm]enu[Bb]ar|[Tt]ray|[Ss]tatus[Bb]ar)(?=(?:Icon|Menu|Item|Controller|App|View|Manager|State|Window)?[-._]))/;
+var TRAY_NAME = /^(?:(?:menubar|menu-bar|menu_bar|tray)(?=[-._]|$)|(?:[Mm]enu[Bb]ar|[Tt]ray|[Ss]ystem[Tt]ray)(?=(?:Icon|Menu|Item|Controller|App|Manager|Window)(?:[A-Z]|[-._]))|(?:[Mm]enu[Bb]ar|[Ss]ystem[Tt]ray)(?=[-._]))/;
 function trayTextFindings(text, file2) {
   const lower = file2.toLowerCase();
   const extension = TRAY_SOURCE_EXTENSIONS.find((item) => lower.endsWith(item));
@@ -2230,6 +2232,9 @@ function trayScanRoot(root) {
   const git = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: root, encoding: "utf8" });
   const top = git.status === 0 ? git.stdout.trim() : "";
   return realpathSync(top || root);
+}
+function escapeGlob(prefix) {
+  return prefix.replace(/[\\*?[\]{}!]/g, (character) => `\\${character}`);
 }
 var TRAY_MAX_BYTES = 2 * 1024 * 1024;
 function trackedFiles(root, exclude) {
@@ -2396,7 +2401,7 @@ function runPublicCopy(root, config, options = {}) {
   if (on("tray") && config.tray) {
     const scanRoot = trayScanRoot(root);
     const prefix = relative(scanRoot, realpathSync(resolve(root))).replaceAll("\\", "/");
-    const rootExclude = prefix ? exclude.map((glob) => `${prefix}/${glob}`) : [...exclude];
+    const rootExclude = prefix ? exclude.map((glob) => `${escapeGlob(prefix)}/${glob}`) : [...exclude];
     const trayExclude = [...rootExclude, ...config.tray === true ? [] : config.tray.exclude ?? []];
     const trayDirectories = new Set;
     for (const { file: file2, size } of trackedFiles(scanRoot, trayExclude)) {

@@ -141,6 +141,12 @@ describe("runPublicCopy control and tray", () => {
     expect(result.findings.map(f => f.location)).toEqual(["app/src/main.ts:1"]);
   });
 
+  test("rebases root excludes literally when the root name holds glob characters", () => {
+    const root = fixture("tray-glob", { "fx[1]/old/menubar.ts": "x\n", "fx[1]/help.txt": "Usage: x\n" });
+    Bun.spawnSync(["git", "init", "-q"], { cwd: root });
+    expect(runPublicCopy(join(root, "fx[1]"), { tray: true, exclude: ["old/**"], guides: false }).findings).toEqual([]);
+  });
+
   test("checks large and binary files by path only", () => {
     const big = `// ${"x".repeat(2 * 1024 * 1024)}\nimport x from "@hraness/desktop-foundation/menu-kit";\n`;
     const root = fixture("tray-large", { "src/big.ts": big, "src/bin.js": 'import x from "menu-kit";\u0000', "src/menubar.ts": `\u0000${big}` });
