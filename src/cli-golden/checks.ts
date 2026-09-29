@@ -236,7 +236,8 @@ export function checkJsonError(id: string, run: CapturedRun): CheckResult {
     if (doc.ok !== false) problems.push('missing "ok": false');
     if (typeof error?.code !== "string" || typeof error?.message !== "string") problems.push('missing "error": {"code", "message"}');
     else if (Array.isArray(error.next)) {
-      problems.push(...nextProblems(error.next, "error.next"));
+      // Outside the shared envelope a malformed list warns, as any non-string next did in 0.5.0.
+      warnings.push(...nextProblems(error.next, "error.next"));
       if (!error.next.length) warnings.push('no "error.next" command');
     } else if (typeof error.next !== "string" || !error.next.trim()) warnings.push('no "error.next" command');
   }

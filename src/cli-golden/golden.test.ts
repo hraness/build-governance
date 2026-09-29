@@ -118,7 +118,8 @@ describe("--json error shapes", () => {
     const bad = checkJsonError("--json error", run({ code: 2, stdout: sharedError([{ command: "demo --help", audience: "robot" }]) }));
     expect(bad.status).toBe("fail");
     expect(bad.detail).toContain("audience");
-    expect(checkJsonError("--json error", run({ code: 2, stdout: `${JSON.stringify({ ok: false, error: { code: "usage", message: "m", next: ["demo --help"] } })}` })).status).toBe("fail");
+    // Outside the envelope it warns, as any non-string next did before.
+    expect(checkJsonError("--json error", run({ code: 2, stdout: `${JSON.stringify({ ok: false, error: { code: "usage", message: "m", next: ["demo --help"] } })}` })).status).toBe("warn");
   });
 
   test("the shared envelope is held to the contract", () => {

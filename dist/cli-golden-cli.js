@@ -1349,7 +1349,7 @@ function checkJsonError(id, run) {
     if (typeof error?.code !== "string" || typeof error?.message !== "string")
       problems.push('missing "error": {"code", "message"}');
     else if (Array.isArray(error.next)) {
-      problems.push(...nextProblems(error.next, "error.next"));
+      warnings.push(...nextProblems(error.next, "error.next"));
       if (!error.next.length)
         warnings.push('no "error.next" command');
     } else if (typeof error.next !== "string" || !error.next.trim())
