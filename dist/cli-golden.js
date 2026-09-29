@@ -1314,53 +1314,72 @@ function parseJson(stdout) {
 function notJson(run) {
   return plain(run.stdout).trim() ? "stdout is not one JSON document" : `nothing on stdout${run.stderr.trim() ? ` (stderr: ${quote(nonBlank(run.stderr)[0])})` : ""}`;
 }
-function checkJsonError(id, run) {
+function exitFor(code) {
+  return Object.hasOwn(SHARED_ERROR_CODES, code) ? SHARED_ERROR_CODES[code] : 1;
+}
+var ONE_LINE = "the envelope spans more than one line; print it on one";
+function oneLine(run) {
+  return plain(run.stdout).trim().includes(`
+`) ? [ONE_LINE] : [];
+}
+function checkJsonError(id, run, shared = { adopted: false }) {
   const problems = [];
   const warnings = [];
   const doc = parseJson(run.stdout);
-  if (run.code !== 2)
-    problems.push(`${exit(run)}, want exit 2`);
-  let shape = "";
   if (!isRecord(doc)) {
+    if (run.code !== 2)
+      problems.push(`${exit(run)}, want exit 2`);
     problems.push(notJson(run));
-  } else if ("schema" in doc || "generatedAt" in doc) {
-    shape = "the shared envelope";
+    return result(id, "D5", problems, warnings, "");
+  }
+  const error = isRecord(doc.error) ? doc.error : undefined;
+  if (shared.adopted || doc.schema === ERROR_SCHEMA) {
     if (doc.ok !== false)
       problems.push('missing "ok": false');
     else
-      problems.push(...envelopeProblems(doc));
-    const error = isRecord(doc.error) ? doc.error : undefined;
-    if (error && Object.hasOwn(SHARED_ERROR_CODES, String(error.code)) && error.code !== "usage") {
-      warnings.push(`error.code is "${String(error.code)}"; an unknown command is "usage"`);
-    }
+      problems.push(...envelopeProblems(doc, shared.product));
+    const code = typeof error?.code === "string" ? error.code : undefined;
+    if (code !== undefined && code !== "usage")
+      warnings.push(`error.code is "${code}"; an unknown command is "usage"`);
+    const want = code === undefined ? 2 : exitFor(code);
+    if (run.code !== want)
+      problems.push(`${exit(run)}, want exit ${want}${code !== undefined && code !== "usage" ? ` for "${code}"` : ""}`);
     if (error && (!Array.isArray(error.next) || !error.next.length))
       warnings.push('no "error.next" command');
-  } else {
-    shape = "the older error shape";
-    const error = isRecord(doc.error) ? doc.error : undefined;
-    if (doc.ok !== false)
-      problems.push('missing "ok": false');
-    if (typeof error?.code !== "string" || typeof error?.message !== "string")
-      problems.push('missing "error": {"code", "message"}');
-    else if (Array.isArray(error.next)) {
-      warnings.push(...nextProblems(error.next, "error.next"));
-      if (!error.next.length)
-        warnings.push('no "error.next" command');
-    } else if (typeof error.next !== "string" || !error.next.trim())
-      warnings.push('no "error.next" command');
+    warnings.push(...oneLine(run));
+    return result(id, "D5", problems, warnings, `{"ok":false,\u2026} on stdout in the shared envelope, ${exit(run)}`);
   }
-  return result(id, "D5", problems, warnings, `{"ok":false,\u2026} on stdout in ${shape}, exit 2`);
+  if (run.code !== 2)
+    problems.push(`${exit(run)}, want exit 2`);
+  if (doc.ok !== false)
+    problems.push('missing "ok": false');
+  if (typeof error?.code !== "string" || typeof error?.message !== "string")
+    problems.push('missing "error": {"code", "message"}');
+  else if (Array.isArray(error.next)) {
+    warnings.push(...nextProblems(error.next, "error.next"));
+    if (!error.next.length)
+      warnings.push('no "error.next" command');
+  } else if (typeof error.next !== "string" || !error.next.trim())
+    warnings.push('no "error.next" command');
+  return result(id, "D5", problems, warnings, `{"ok":false,\u2026} on stdout in the older error shape, exit 2`);
 }
 function sharedVerbs(run) {
   const doc = parseJson(run.stdout);
-  if (!isRecord(doc) || doc.ok !== true || !isRecord(doc.data) || !Array.isArray(doc.data.verbs))
-    return;
-  const verbs = new Set;
-  for (const verb of doc.data.verbs) {
-    if (isRecord(verb) && Array.isArray(verb.path) && verb.path.every((part) => typeof part === "string"))
-      verbs.add(verb.path.join(" "));
+  const verbs = new Map;
+  if (isRecord(doc) && isRecord(doc.data) && Array.isArray(doc.data.verbs)) {
+    for (const verb of doc.data.verbs) {
+      if (isRecord(verb) && Array.isArray(verb.path) && verb.path.every((part) => typeof part === "string")) {
+        verbs.set(verb.path.join(" "), typeof verb.opClass === "string" ? verb.opClass : "");
+      }
+    }
   }
-  return verbs;
+  if (isRecord(doc) && (doc.schema === COMMANDS_SCHEMA || doc.schema === ERROR_SCHEMA)) {
+    const usage = doc.ok === false && isRecord(doc.error) && doc.error.code === "usage";
+    return { adopted: !usage, verbs };
+  }
+  if (isRecord(doc) && doc.ok === true && verbs.size)
+    return { adopted: true, verbs };
+  return { adopted: !run.timedOut && !run.signal && run.code !== 2, verbs };
 }
 function findingProblems(findings) {
   const problems = findings.slice(0, 3).map((item) => item.excerpt);
@@ -1368,9 +1387,9 @@ function findingProblems(findings) {
     problems.push(`${findings.length - 3} more`);
   return problems;
 }
-function envelopeRun(id, rule, run, product) {
+function envelopeRun(id, rule, run, product, extra = []) {
   const problems = [];
-  const warnings = [];
+  const warnings = [...extra];
   const doc = parseJson(run.stdout);
   if (run.timedOut || run.signal)
     problems.push(exit(run));
@@ -1379,60 +1398,52 @@ function envelopeRun(id, rule, run, product) {
     return { check: result(id, rule, problems, warnings, ""), doc: undefined };
   }
   problems.push(...envelopeProblems(doc, product));
-  if (plain(run.stdout).trim().includes(`
-`))
-    warnings.push("the envelope spans more than one line; print it on one");
+  warnings.push(...oneLine(run));
   let want;
+  let what = '"ok": true';
   if (doc.ok === true)
     want = 0;
   else if (doc.ok === false && isRecord(doc.error) && typeof doc.error.code === "string") {
-    want = Object.hasOwn(SHARED_ERROR_CODES, doc.error.code) ? SHARED_ERROR_CODES[doc.error.code] : 1;
+    want = exitFor(doc.error.code);
+    what = `"${doc.error.code}"`;
   }
-  if (want !== undefined && !run.timedOut && !run.signal && run.code !== want) {
-    problems.push(`${exit(run)}, want exit ${want} for ${doc.ok === true ? '"ok": true' : `"${String(doc.error.code)}"`}`);
-  }
+  if (want !== undefined && !run.timedOut && !run.signal && run.code !== want)
+    problems.push(`${exit(run)}, want exit ${want} for ${what}`);
   const summary = doc.ok === true ? `${String(doc.schema)}, exit 0` : `error ${isRecord(doc.error) ? String(doc.error.code) : "?"}, ${exit(run)}`;
   return { check: result(id, rule, problems, warnings, summary), doc };
 }
 function checkShared(shared) {
-  if (!shared || !sharedVerbs(shared.commands)) {
-    const why = shared ? `\`commands --json\` printed no commands envelope (${exit(shared.commands)})` : "not captured";
+  const listed = shared ? sharedVerbs(shared.commands) : undefined;
+  if (!shared || !listed?.adopted) {
+    const why = shared ? `\`commands --json\` is a usage error (${exit(shared.commands)})` : "not captured";
     return [{ id: "shared commands", rule: "C1", status: "skip", detail: `${why}; these checks run once the CLI has the shared commands` }];
   }
-  const verbs = sharedVerbs(shared.commands);
   const commandsDoc = parseJson(shared.commands.stdout);
-  const commands = checkCommands(commandsDoc, "commands --json");
-  const product = commands.product;
-  const commandProblems = findingProblems(commands.findings);
+  const commands = isRecord(commandsDoc) ? checkCommands(commandsDoc, "commands --json") : undefined;
+  const product = commands?.product;
+  const commandProblems = commands ? findingProblems(commands.findings) : [notJson(shared.commands)];
   if (shared.commands.code !== 0)
     commandProblems.unshift(`${exit(shared.commands)}, want exit 0`);
-  const commandWarnings = plain(shared.commands.stdout).trim().includes(`
-`) ? ["the envelope spans more than one line; print it on one"] : [];
-  const results = [result("commands --json", "C1", commandProblems, commandWarnings, `${verbs.size} verbs${product ? ` for ${product}` : ""}, exit 0`)];
+  const verbs = commands?.verbs ?? new Set;
+  const results = [result("commands --json", "C1", commandProblems, oneLine(shared.commands), `${verbs.size} verbs${product ? ` for ${product}` : ""}, exit 0`)];
   let statusDoc;
   if (shared.status) {
     const status = envelopeRun("status --json", "C4", shared.status, product);
     statusDoc = status.doc;
     results.push(status.check);
   } else {
-    results.push({ id: "status --json", rule: "C4", status: "fail", detail: "not captured" });
+    results.push({ id: "status --json", rule: "C4", status: "fail", detail: "not run: `commands --json` lists no read `status` verb" });
   }
   for (const verb of ["tui", "doctor"]) {
     const run = shared[verb];
-    const rule = verb === "tui" ? "C3" : "C1";
+    const rule = verb === "tui" ? "C3" : "C4";
     if (!run) {
-      results.push({ id: `${verb} --json`, rule, status: verbs.has(verb) ? "skip" : "warn", detail: verbs.has(verb) ? "not captured" : `\`commands --json\` lists no ${verb} verb; every product has ${verb}` });
+      const detail = verbs.has(verb) ? `not run: \`commands --json\` lists ${verb} with an op class other than read` : `\`commands --json\` lists no ${verb} verb; every product has ${verb}`;
+      results.push({ id: `${verb} --json`, rule, status: "warn", detail });
       continue;
     }
-    const checked = envelopeRun(`${verb} --json`, rule, run, product);
-    if (verb === "tui" && checked.check.status !== "fail" && isRecord(statusDoc) && isRecord(checked.doc)) {
-      const differs = checkTuiMatchesStatus(checked.doc, statusDoc, "tui --json", "status --json");
-      if (differs.length) {
-        results.push({ id: checked.check.id, rule, status: "warn", detail: "differs from status --json apart from generatedAt; load both from one function" });
-        continue;
-      }
-    }
-    results.push(checked.check);
+    const differs = verb === "tui" && isRecord(statusDoc) && isRecord(parseJson(run.stdout)) && checkTuiMatchesStatus(parseJson(run.stdout), statusDoc, "tui --json", "status --json").length > 0;
+    results.push(envelopeRun(`${verb} --json`, rule, run, product, differs ? ["differs from status --json apart from generatedAt; load both from one function"] : []).check);
   }
   return results;
 }
@@ -1488,8 +1499,14 @@ function evaluate(runs, config) {
     results.push(checkCommandHelp(item.command, item.flag, item.topic));
   results.push(...checkVersion(runs.name, runs.version, runs.versionJson));
   results.push(checkUnknown(runs.unknown, runs.unknownText));
-  results.push(checkJsonError("--json error", runs.unknownJson));
-  results.push(checkJsonError("agent error", runs.unknownAgent));
+  const listed = runs.shared ? sharedVerbs(runs.shared.commands) : undefined;
+  const commandsDoc = listed?.adopted ? parseJson(runs.shared.commands.stdout) : undefined;
+  const context = {
+    adopted: listed?.adopted ?? false,
+    product: isRecord(commandsDoc) ? checkCommands(commandsDoc, "commands --json").product : undefined
+  };
+  results.push(checkJsonError("--json error", runs.unknownJson, context));
+  results.push(checkJsonError("agent error", runs.unknownAgent, context));
   results.push(checkNoColor(runs.ttyNoColor));
   const pipes = [runs.bare, runs.help, ...runs.commands.map((item) => item.flag), runs.version, runs.unknownText];
   results.push(checkNonTty(pipes));
@@ -1793,15 +1810,15 @@ class GoldenRunner {
   }
   async collectShared() {
     const commands = await this.run({ args: ["commands", "--json"] });
-    const verbs = sharedVerbs(commands);
-    if (!verbs)
-      return { commands };
-    return {
-      commands,
-      status: await this.run({ args: ["status", "--json"] }),
-      ...verbs.has("tui") ? { tui: await this.run({ args: ["tui", "--json"] }) } : {},
-      ...verbs.has("doctor") ? { doctor: await this.run({ args: ["doctor", "--json"] }) } : {}
-    };
+    const listed = sharedVerbs(commands);
+    const runs = { commands };
+    if (!listed.adopted)
+      return runs;
+    for (const verb of ["status", "tui", "doctor"]) {
+      if (listed.verbs.get(verb) === "read")
+        runs[verb] = await this.run({ args: [verb, "--json"] });
+    }
+    return runs;
   }
 }
 function detectScript() {

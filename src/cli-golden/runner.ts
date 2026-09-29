@@ -223,20 +223,19 @@ export class GoldenRunner {
   }
 
   /**
-   * The shared commands with `--json`: `commands` first, then `status`, `tui` and `doctor` only when
-   * `commands --json` answers with the commands envelope (`tui` and `doctor` only when it lists them).
-   * Each is a read verb, and each runs under the private HOME.
+   * The shared commands with `--json`: `commands` first, then each of `status`, `tui` and `doctor` that
+   * `commands --json` lists with the `read` op class, so the harness never runs a verb that changes state.
+   * Each runs under the private HOME.
    */
   async collectShared(): Promise<SharedRuns> {
     const commands = await this.run({ args: ["commands", "--json"] });
-    const verbs = sharedVerbs(commands);
-    if (!verbs) return { commands };
-    return {
-      commands,
-      status: await this.run({ args: ["status", "--json"] }),
-      ...(verbs.has("tui") ? { tui: await this.run({ args: ["tui", "--json"] }) } : {}),
-      ...(verbs.has("doctor") ? { doctor: await this.run({ args: ["doctor", "--json"] }) } : {}),
-    };
+    const listed = sharedVerbs(commands);
+    const runs: { commands: CapturedRun; status?: CapturedRun; tui?: CapturedRun; doctor?: CapturedRun } = { commands };
+    if (!listed.adopted) return runs;
+    for (const verb of ["status", "tui", "doctor"] as const) {
+      if (listed.verbs.get(verb) === "read") runs[verb] = await this.run({ args: [verb, "--json"] });
+    }
+    return runs;
   }
 }
 
