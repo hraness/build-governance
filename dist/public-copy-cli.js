@@ -1807,7 +1807,7 @@ function isObject(value) {
 function extraKeys(value, allowed) {
   return Object.keys(value).filter((key) => !allowed.includes(key));
 }
-function checkNext(value, where) {
+function nextProblems(value, where) {
   if (!Array.isArray(value))
     return [`${where} must be an array`];
   const problems = [];
@@ -1843,7 +1843,7 @@ function envelopeProblems(value, product) {
     if (!("data" in value))
       problems.push('missing "data"');
     if ("next" in value)
-      problems.push(...checkNext(value.next, "next"));
+      problems.push(...nextProblems(value.next, "next"));
     return problems;
   }
   if (value.ok === false) {
@@ -1863,7 +1863,7 @@ function envelopeProblems(value, product) {
     if ("detail" in error && typeof error.detail !== "string")
       problems.push("error.detail must be a string");
     if ("next" in error)
-      problems.push(...checkNext(error.next, "error.next"));
+      problems.push(...nextProblems(error.next, "error.next"));
     const code = error.code;
     if (typeof code !== "string" || !ENVELOPE_CODE.test(code)) {
       problems.push("error.code must be a shared code or <product>.<code>");

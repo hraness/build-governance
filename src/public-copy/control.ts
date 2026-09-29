@@ -69,7 +69,8 @@ function extraKeys(value: JsonObject, allowed: readonly string[]): string[] {
   return Object.keys(value).filter(key => !allowed.includes(key));
 }
 
-function checkNext(value: unknown, where: string): string[] {
+/** Problems with a `next` list of `{command, why, audience}`, as short phrases. Empty means valid. */
+export function nextProblems(value: unknown, where: string): string[] {
   if (!Array.isArray(value)) return [`${where} must be an array`];
   const problems: string[] = [];
   value.forEach((item, index) => {
@@ -100,7 +101,7 @@ export function envelopeProblems(value: unknown, product?: string): string[] {
     for (const key of extraKeys(value, ["ok", "schema", "generatedAt", "data", "next"])) problems.push(`unknown field "${key}"`);
     if (typeof value.schema !== "string" || !SCHEMA_ID.test(value.schema)) problems.push('"schema" must be an id such as example.status/1');
     if (!("data" in value)) problems.push('missing "data"');
-    if ("next" in value) problems.push(...checkNext(value.next, "next"));
+    if ("next" in value) problems.push(...nextProblems(value.next, "next"));
     return problems;
   }
   if (value.ok === false) {
@@ -114,7 +115,7 @@ export function envelopeProblems(value: unknown, product?: string): string[] {
     for (const key of extraKeys(error, ["code", "message", "detail", "next"])) problems.push(`error has an unknown field "${key}"`);
     if (typeof error.message !== "string" || !error.message) problems.push("error.message must be a non-empty string");
     if ("detail" in error && typeof error.detail !== "string") problems.push("error.detail must be a string");
-    if ("next" in error) problems.push(...checkNext(error.next, "error.next"));
+    if ("next" in error) problems.push(...nextProblems(error.next, "error.next"));
     const code = error.code;
     if (typeof code !== "string" || !ENVELOPE_CODE.test(code)) {
       problems.push("error.code must be a shared code or <product>.<code>");

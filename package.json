@@ -1,6 +1,6 @@
 {
   "name": "@hraness/build-governance",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Build checks shared by Hraness repositories: Effect architecture rules, package inventory, a public copy lint, and CLI output checks.",
   "license": "MIT",
   "type": "module",

@@ -68,7 +68,7 @@ on:
       governance-ref:
         description: "build-governance tag or branch that provides the lint"
         type: string
-        default: v0.5.0
+        default: v0.5.1
 
 permissions:
   contents: read

@@ -7,7 +7,7 @@ Each repository keeps its own settings: an architecture policy map, any product-
 ## Install
 
 ```sh
-bun add -d github:hraness/build-governance#v0.5.0
+bun add -d github:hraness/build-governance#v0.5.1
 ```
 
 The package needs Bun 1.3.14 or later. The architecture checker also needs TypeScript 6 in the consuming repository.
@@ -190,14 +190,17 @@ hraness-cli-golden --cli "bun src/cli.ts" --name textbutler --commands "setup,st
 | `help:<command>` | D3 | `<command> --help` exits 0 with help on stdout. A different `help <command>` warns. |
 | `version`, `version --json` | D4 | `--version` prints `name X.Y.Z`; with `--json`, `{"name","version"}` |
 | `unknown command` | D5 | An unknown command prints `✗ … "stauts" …` then `→ next command` on stderr, nothing on stdout, no usage dump, and exits 2 |
-| `--json error`, `agent error` | D5 | With `--json`, or with `AI_AGENT=1`, the error is one `{"ok":false,"error":{"code","message","next"}}` document on stdout with exit 2 |
+| `--json error`, `agent error` | D5, C4 | With `--json`, or with `AI_AGENT=1`, the error is one JSON document on stdout with exit 2. The shared envelope (`"schema": "hraness.error/1"`) must match desktop-foundation's `contract/envelope.schema.json`, with `error.next` as a list of `{command, why, audience}`. The older `{"ok":false,"error":{"code","message","next":"<command>"}}` shape still passes. A missing `next` warns |
 | `NO_COLOR` | D6 | `NO_COLOR=1` on a terminal prints no color. Skipped where `script` cannot open a pseudo-terminal. |
 | `non-TTY` | D6 | Output to a pipe has no escape sequences |
 | `TERM=dumb` | D6 | `TERM=dumb` output uses the ASCII fallbacks (`OK`, `FAIL`, `WARN`, `->`) instead of `✓ ✗ ⚠ → ● ○ ↻ 🔐` |
 | `\| head -1` | D8 | Closing stdout after one line of `--help` ends the tool quietly, with no panic, trace, or `EPIPE` |
 | `help copy` | D3 | The captured help passes the `cli-case` and `cli-jargon` copy rules |
+| `commands --json` | C1 | When `commands --json` prints the commands envelope, it passes the `control` checks: op classes, who may run each verb, shared verbs, a `status` verb, no menu bar verbs. A CLI without it gets one skipped `shared commands` row |
+| `status --json`, `doctor --json` | C1, C4 | One envelope on one line of stdout that matches `contract/envelope.schema.json`, exiting 0 for `"ok": true` and with the error code's exit status otherwise. A missing `tui` or `doctor` verb warns |
+| `tui --json` | C3 | The same checks, and it equals `status --json` apart from `generatedAt` |
 
-The command exits 1 when a check fails, 0 under `--advisory`, and 2 for a usage error. Other options: `--unknown <word>`, `--cwd <dir>`, `--env NAME=value`, `--proper-noun <name>`, `--write <dir>` to save the captured output as golden files, `--annotations` for GitHub Actions, `--timeout <seconds>`, and `--json`. In GitHub Actions it also writes a table to the job summary.
+The command exits 1 when a check fails, 0 under `--advisory`, and 2 for a usage error. Other options: `--unknown <word>`, `--cwd <dir>`, `--env NAME=value`, `--proper-noun <name>`, `--write <dir>` to save the captured output as golden files (with `commands.json`, `status.json`, `tui.json` and `doctor.json` for a CLI with the shared commands), `--annotations` for GitHub Actions, `--timeout <seconds>`, and `--json`. In GitHub Actions it also writes a table to the job summary.
 
 ## Run the checks in CI
 
@@ -206,7 +209,7 @@ Two reusable workflows run these checks in a product's CI without adding a depen
 ```yaml
 jobs:
   cli-golden:
-    uses: hraness/build-governance/.github/workflows/cli-golden.yml@v0.5.0
+    uses: hraness/build-governance/.github/workflows/cli-golden.yml@v0.5.1
     with:
       build: bun install --frozen-lockfile
       cli: bun src/cli.ts
@@ -214,7 +217,7 @@ jobs:
       commands: setup,status,chats add
 
   ux-copy:
-    uses: hraness/build-governance/.github/workflows/ux-copy.yml@v0.5.0
+    uses: hraness/build-governance/.github/workflows/ux-copy.yml@v0.5.1
     with:
       bare-golden: test/golden/bare.txt
       help-golden: test/golden/help.txt

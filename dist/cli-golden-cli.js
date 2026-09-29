@@ -937,6 +937,245 @@ function lintCliHelp(text, options) {
   return findings;
 }
 
+// src/public-copy/control.ts
+var CONTROL_CONTRACT_VERSION = "desktop-foundation/v1.0.0";
+var COMMANDS_SCHEMA = "hraness.commands/1";
+var ERROR_SCHEMA = "hraness.error/1";
+var OP_CLASSES = ["read", "operate", "decide", "decide-legacy"];
+var GATE_TIERS = ["T1T2", "T3"];
+var SHARED_ERROR_CODES = {
+  usage: 2,
+  "not-found": 1,
+  "permission-denied": 1,
+  "human-required": 3,
+  "gate-failed": 3,
+  "gate-expired": 3,
+  "owner-unavailable": 4,
+  "control-already-running": 5,
+  conflict: 5,
+  "digest-mismatch": 5,
+  "unsupported-platform": 1,
+  internal: 1
+};
+var PRODUCT_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+var VERB_SEGMENT = /^[a-z][a-z0-9-]{0,31}$/;
+var SCHEMA_ID = /^[a-z][a-z0-9-]{0,31}(\.[a-z0-9][a-z0-9-]{0,31})+\/[0-9]{1,9}$/;
+var ENVELOPE_CODE = /^([a-z][a-z0-9-]*|[a-z][a-z0-9-]{0,31}\.[a-z0-9][a-z0-9.-]{0,63})$/;
+var PRODUCT_CODE = /^[a-z][a-z0-9-]{0,31}\.[a-z0-9][a-z0-9.-]{0,63}$/;
+var TIMESTAMP = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/;
+var GRAMMAR = [
+  { path: "status", opClass: ["read"] },
+  { path: "tui", opClass: ["read"] },
+  { path: "doctor", opClass: ["read"] },
+  { path: "control status", opClass: ["read"] },
+  { path: "control stop", opClass: ["operate"] },
+  { path: "control install", opClass: ["decide"] },
+  { path: "control uninstall", opClass: ["decide"] },
+  { path: "approvals list", opClass: ["read"] },
+  { path: "approvals show", opClass: ["read"] },
+  { path: "approvals decide", opClass: ["decide"] },
+  { path: "permissions list", opClass: ["read"] },
+  { path: "permissions set", opClass: ["decide"] }
+];
+var RETIRED_VERBS = ["menubar", "menu-bar", "tray", "companion"];
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function extraKeys(value, allowed) {
+  return Object.keys(value).filter((key) => !allowed.includes(key));
+}
+function nextProblems(value, where) {
+  if (!Array.isArray(value))
+    return [`${where} must be an array`];
+  const problems = [];
+  value.forEach((item, index) => {
+    const at = `${where}[${index}]`;
+    if (!isObject(item)) {
+      problems.push(`${at} must be an object`);
+      return;
+    }
+    for (const key of extraKeys(item, ["command", "why", "audience"]))
+      problems.push(`${at} has an unknown field "${key}"`);
+    if (typeof item.command !== "string" || !item.command)
+      problems.push(`${at}.command must be a non-empty string`);
+    if (typeof item.why !== "string" || !item.why)
+      problems.push(`${at}.why must be a non-empty string`);
+    if (item.audience !== "agent" && item.audience !== "human")
+      problems.push(`${at}.audience must be "agent" or "human"`);
+  });
+  return problems;
+}
+function envelopeProblems(value, product) {
+  if (!isObject(value))
+    return ["not a JSON object"];
+  const problems = [];
+  if (typeof value.generatedAt !== "string" || !TIMESTAMP.test(value.generatedAt)) {
+    problems.push('"generatedAt" must be a UTC timestamp with milliseconds, such as 2026-09-28T00:00:00.000Z');
+  }
+  if (value.ok === true) {
+    for (const key of extraKeys(value, ["ok", "schema", "generatedAt", "data", "next"]))
+      problems.push(`unknown field "${key}"`);
+    if (typeof value.schema !== "string" || !SCHEMA_ID.test(value.schema))
+      problems.push('"schema" must be an id such as example.status/1');
+    if (!("data" in value))
+      problems.push('missing "data"');
+    if ("next" in value)
+      problems.push(...nextProblems(value.next, "next"));
+    return problems;
+  }
+  if (value.ok === false) {
+    for (const key of extraKeys(value, ["ok", "schema", "generatedAt", "error"]))
+      problems.push(`unknown field "${key}"`);
+    if (value.schema !== ERROR_SCHEMA)
+      problems.push(`"schema" must be "${ERROR_SCHEMA}" on an error`);
+    const error = value.error;
+    if (!isObject(error)) {
+      problems.push('missing "error" object');
+      return problems;
+    }
+    for (const key of extraKeys(error, ["code", "message", "detail", "next"]))
+      problems.push(`error has an unknown field "${key}"`);
+    if (typeof error.message !== "string" || !error.message)
+      problems.push("error.message must be a non-empty string");
+    if ("detail" in error && typeof error.detail !== "string")
+      problems.push("error.detail must be a string");
+    if ("next" in error)
+      problems.push(...nextProblems(error.next, "error.next"));
+    const code = error.code;
+    if (typeof code !== "string" || !ENVELOPE_CODE.test(code)) {
+      problems.push("error.code must be a shared code or <product>.<code>");
+    } else if (!Object.hasOwn(SHARED_ERROR_CODES, code)) {
+      if (!PRODUCT_CODE.test(code))
+        problems.push(`error.code "${code}" is not a shared code; a product code needs its prefix, as in ${product ?? "example"}.${code}`);
+      else if (product && !code.startsWith(`${product}.`))
+        problems.push(`error.code "${code}" uses another product's prefix; use ${product}.`);
+    }
+    if (code === "human-required") {
+      const next = Array.isArray(error.next) ? error.next : [];
+      if (!next.some((item) => isObject(item) && item.audience === "human")) {
+        problems.push('a human-required error needs an error.next entry with "audience": "human"');
+      }
+    }
+    return problems;
+  }
+  problems.unshift('"ok" must be true or false');
+  return problems;
+}
+function finding(location, excerpt, hint) {
+  return { rule: "control", severity: "error", surface: "agent", location, excerpt, hint };
+}
+function checkEnvelope(value, location, product) {
+  const problems = envelopeProblems(value, product);
+  if (!problems.length)
+    return [];
+  return [finding(location, problems.join("; "), "Print every --json result through desktop-foundation's envelope (okEnvelope or runCli), which matches contract/envelope.schema.json.")];
+}
+function checkCommands(value, location) {
+  const findings = [];
+  const verbs = new Set;
+  const fail = (excerpt, hint) => {
+    findings.push(finding(location, excerpt, hint));
+  };
+  const product = isObject(value) && isObject(value.data) && typeof value.data.product === "string" && PRODUCT_NAME.test(value.data.product) ? value.data.product : undefined;
+  findings.push(...checkEnvelope(value, location, product));
+  if (!isObject(value) || value.ok !== true) {
+    if (isObject(value) && value.ok === false)
+      fail("commands --json returned an error", "Capture the output of a working `<product> commands --json`.");
+    return { findings, verbs, ...product ? { product } : {} };
+  }
+  if (value.schema !== COMMANDS_SCHEMA)
+    fail(`schema ${JSON.stringify(value.schema)}`, `commands --json must use the schema ${COMMANDS_SCHEMA}.`);
+  const data = value.data;
+  if (!isObject(data)) {
+    fail("data is not an object", 'commands --json data is { "product", "verbs" }.');
+    return { findings, verbs };
+  }
+  for (const key of extraKeys(data, ["product", "verbs"]))
+    fail(`data.${key}`, 'commands --json data has only "product" and "verbs".');
+  if (!product)
+    fail(`product ${JSON.stringify(data.product)}`, "data.product must be the product name: lowercase letters, digits and hyphens.");
+  if (!Array.isArray(data.verbs) || !data.verbs.length) {
+    fail("no verbs", "data.verbs lists every verb the command line accepts.");
+    return { findings, verbs, ...product ? { product } : {} };
+  }
+  const classes = new Map;
+  data.verbs.forEach((verb, index) => {
+    const at = `verbs[${index}]`;
+    if (!isObject(verb)) {
+      fail(`${at} is not an object`, "Each verb is { path, opClass, schema, summary, gate?, operateWhen? }.");
+      return;
+    }
+    const path = verb.path;
+    const validPath = Array.isArray(path) && path.length > 0 && path.every((segment) => typeof segment === "string" && VERB_SEGMENT.test(segment));
+    const name = validPath ? path.join(" ") : at;
+    if (!validPath) {
+      fail(`${at}.path ${JSON.stringify(path)}`, 'A verb path is one or more lowercase words, such as ["approvals", "list"].');
+      return;
+    }
+    for (const key of extraKeys(verb, ["path", "opClass", "schema", "summary", "gate", "operateWhen"]))
+      fail(`${name}: ${key}`, "A verb descriptor has only path, opClass, schema, summary, gate and operateWhen.");
+    if (verbs.has(name))
+      fail(`${name} is listed twice`, "Register each verb path once.");
+    verbs.add(name);
+    const first = path[0] ?? "";
+    if (first === "commands")
+      fail(name, "`commands` is built in. Do not register it as a verb.");
+    if (path.some((segment) => RETIRED_VERBS.includes(segment))) {
+      fail(name, "Menu bar and tray companions were retired in desktop-foundation 1.0. Offer `tui` and `status --json` instead.");
+    }
+    const opClass = verb.opClass;
+    if (typeof opClass !== "string" || !OP_CLASSES.includes(opClass)) {
+      fail(`${name}: opClass ${JSON.stringify(opClass)}`, `Every verb needs an op class: ${OP_CLASSES.join(", ")}.`);
+    } else {
+      classes.set(name, opClass);
+    }
+    if (typeof verb.schema !== "string" || !SCHEMA_ID.test(verb.schema))
+      fail(`${name}: schema ${JSON.stringify(verb.schema)}`, "A verb schema is an id such as example.status/1.");
+    if (typeof verb.summary !== "string" || !verb.summary.trim())
+      fail(`${name}: no summary`, "Give every verb a one-line summary.");
+    const gate = verb.gate;
+    if (gate !== undefined && (typeof gate !== "string" || !GATE_TIERS.includes(gate))) {
+      fail(`${name}: gate ${JSON.stringify(gate)}`, `A gate tier is ${GATE_TIERS.join(" or ")}.`);
+    }
+    if (opClass === "decide" && gate === undefined)
+      fail(`${name}: decide without a gate`, "A decide verb needs the human gate.");
+    if ((opClass === "read" || opClass === "operate") && gate !== undefined)
+      fail(`${name}: ${opClass} with a gate`, `A ${opClass} verb cannot have a gate.`);
+    if (verb.operateWhen !== undefined && (gate === undefined || typeof verb.operateWhen !== "string" || !verb.operateWhen.trim())) {
+      fail(`${name}: operateWhen`, "operateWhen is a summary string, and only a gated verb has one.");
+    }
+  });
+  for (const rule of GRAMMAR) {
+    const actual = classes.get(rule.path);
+    if (actual === undefined) {
+      if (rule.path === "status" && !verbs.has("status"))
+        fail("no status verb", "Every product answers `<product> status --json` with one-screen health.");
+      continue;
+    }
+    if (!rule.opClass.includes(actual))
+      fail(`${rule.path}: ${actual}`, `The shared verb \`${rule.path}\` is ${rule.opClass.join(" or ")}.`);
+  }
+  return { findings, verbs, ...product ? { product } : {} };
+}
+function withoutGeneratedAt(value) {
+  if (!isObject(value))
+    return value;
+  const { generatedAt: _generatedAt, ...rest } = value;
+  return rest;
+}
+function canonical(value) {
+  if (Array.isArray(value))
+    return `[${value.map(canonical).join(",")}]`;
+  if (isObject(value))
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  return JSON.stringify(value) ?? "undefined";
+}
+function checkTuiMatchesStatus(tui, status, location, statusLocation) {
+  if (canonical(withoutGeneratedAt(tui)) === canonical(withoutGeneratedAt(status)))
+    return [];
+  return [finding(location, `differs from ${statusLocation}`, "`tui --json` prints the same envelope as `status --json` (only generatedAt may differ). Load both from one function.")];
+}
+
 // src/cli-golden/checks.ts
 var ANY_ESCAPE = /\u001b/;
 var COLOR = /\u001b\[[0-9;]*m/;
@@ -1068,30 +1307,140 @@ function checkUnknown(unknown, run) {
   }
   return result("unknown command", "D5", problems, warnings, `${first.trim()} (exit 2)`);
 }
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseJson(stdout) {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return;
+  }
+}
+function notJson(run) {
+  return plain(run.stdout).trim() ? "stdout is not one JSON document" : `nothing on stdout${run.stderr.trim() ? ` (stderr: ${quote(nonBlank(run.stderr)[0])})` : ""}`;
+}
 function checkJsonError(id, run) {
   const problems = [];
   const warnings = [];
-  let parsed;
-  try {
-    parsed = JSON.parse(run.stdout);
-  } catch {
-    parsed = undefined;
-  }
-  const doc = parsed;
+  const doc = parseJson(run.stdout);
   if (run.code !== 2)
     problems.push(`${exit(run)}, want exit 2`);
-  if (!doc || typeof doc !== "object") {
-    const where = plain(run.stdout).trim() ? "stdout is not one JSON document" : `nothing on stdout${run.stderr.trim() ? ` (stderr: ${quote(nonBlank(run.stderr)[0])})` : ""}`;
-    problems.push(where);
-  } else {
+  let shape = "";
+  if (!isRecord(doc)) {
+    problems.push(notJson(run));
+  } else if ("schema" in doc || "generatedAt" in doc) {
+    shape = "the shared envelope";
     if (doc.ok !== false)
       problems.push('missing "ok": false');
-    if (typeof doc.error?.code !== "string" || typeof doc.error?.message !== "string")
+    else
+      problems.push(...envelopeProblems(doc));
+    const error = isRecord(doc.error) ? doc.error : undefined;
+    if (error && Object.hasOwn(SHARED_ERROR_CODES, String(error.code)) && error.code !== "usage") {
+      warnings.push(`error.code is "${String(error.code)}"; an unknown command is "usage"`);
+    }
+    if (error && (!Array.isArray(error.next) || !error.next.length))
+      warnings.push('no "error.next" command');
+  } else {
+    shape = "the older error shape";
+    const error = isRecord(doc.error) ? doc.error : undefined;
+    if (doc.ok !== false)
+      problems.push('missing "ok": false');
+    if (typeof error?.code !== "string" || typeof error?.message !== "string")
       problems.push('missing "error": {"code", "message"}');
-    else if (typeof doc.error.next !== "string")
+    else if (Array.isArray(error.next)) {
+      problems.push(...nextProblems(error.next, "error.next"));
+      if (!error.next.length)
+        warnings.push('no "error.next" command');
+    } else if (typeof error.next !== "string" || !error.next.trim())
       warnings.push('no "error.next" command');
   }
-  return result(id, "D5", problems, warnings, `{"ok":false,\u2026} on stdout, exit 2`);
+  return result(id, "D5", problems, warnings, `{"ok":false,\u2026} on stdout in ${shape}, exit 2`);
+}
+function sharedVerbs(run) {
+  const doc = parseJson(run.stdout);
+  if (!isRecord(doc) || doc.ok !== true || !isRecord(doc.data) || !Array.isArray(doc.data.verbs))
+    return;
+  const verbs = new Set;
+  for (const verb of doc.data.verbs) {
+    if (isRecord(verb) && Array.isArray(verb.path) && verb.path.every((part) => typeof part === "string"))
+      verbs.add(verb.path.join(" "));
+  }
+  return verbs;
+}
+function findingProblems(findings) {
+  const problems = findings.slice(0, 3).map((item) => item.excerpt);
+  if (findings.length > 3)
+    problems.push(`${findings.length - 3} more`);
+  return problems;
+}
+function envelopeRun(id, rule, run, product) {
+  const problems = [];
+  const warnings = [];
+  const doc = parseJson(run.stdout);
+  if (run.timedOut || run.signal)
+    problems.push(exit(run));
+  if (!isRecord(doc)) {
+    problems.push(notJson(run));
+    return { check: result(id, rule, problems, warnings, ""), doc: undefined };
+  }
+  problems.push(...envelopeProblems(doc, product));
+  if (plain(run.stdout).trim().includes(`
+`))
+    warnings.push("the envelope spans more than one line; print it on one");
+  let want;
+  if (doc.ok === true)
+    want = 0;
+  else if (doc.ok === false && isRecord(doc.error) && typeof doc.error.code === "string") {
+    want = Object.hasOwn(SHARED_ERROR_CODES, doc.error.code) ? SHARED_ERROR_CODES[doc.error.code] : 1;
+  }
+  if (want !== undefined && !run.timedOut && !run.signal && run.code !== want) {
+    problems.push(`${exit(run)}, want exit ${want} for ${doc.ok === true ? '"ok": true' : `"${String(doc.error.code)}"`}`);
+  }
+  const summary = doc.ok === true ? `${String(doc.schema)}, exit 0` : `error ${isRecord(doc.error) ? String(doc.error.code) : "?"}, ${exit(run)}`;
+  return { check: result(id, rule, problems, warnings, summary), doc };
+}
+function checkShared(shared) {
+  if (!shared || !sharedVerbs(shared.commands)) {
+    const why = shared ? `\`commands --json\` printed no commands envelope (${exit(shared.commands)})` : "not captured";
+    return [{ id: "shared commands", rule: "C1", status: "skip", detail: `${why}; these checks run once the CLI has the shared commands` }];
+  }
+  const verbs = sharedVerbs(shared.commands);
+  const commandsDoc = parseJson(shared.commands.stdout);
+  const commands = checkCommands(commandsDoc, "commands --json");
+  const product = commands.product;
+  const commandProblems = findingProblems(commands.findings);
+  if (shared.commands.code !== 0)
+    commandProblems.unshift(`${exit(shared.commands)}, want exit 0`);
+  const commandWarnings = plain(shared.commands.stdout).trim().includes(`
+`) ? ["the envelope spans more than one line; print it on one"] : [];
+  const results = [result("commands --json", "C1", commandProblems, commandWarnings, `${verbs.size} verbs${product ? ` for ${product}` : ""}, exit 0`)];
+  let statusDoc;
+  if (shared.status) {
+    const status = envelopeRun("status --json", "C4", shared.status, product);
+    statusDoc = status.doc;
+    results.push(status.check);
+  } else {
+    results.push({ id: "status --json", rule: "C4", status: "fail", detail: "not captured" });
+  }
+  for (const verb of ["tui", "doctor"]) {
+    const run = shared[verb];
+    const rule = verb === "tui" ? "C3" : "C1";
+    if (!run) {
+      results.push({ id: `${verb} --json`, rule, status: verbs.has(verb) ? "skip" : "warn", detail: verbs.has(verb) ? "not captured" : `\`commands --json\` lists no ${verb} verb; every product has ${verb}` });
+      continue;
+    }
+    const checked = envelopeRun(`${verb} --json`, rule, run, product);
+    if (verb === "tui" && checked.check.status !== "fail" && isRecord(statusDoc) && isRecord(checked.doc)) {
+      const differs = checkTuiMatchesStatus(checked.doc, statusDoc, "tui --json", "status --json");
+      if (differs.length) {
+        results.push({ id: checked.check.id, rule, status: "warn", detail: "differs from status --json apart from generatedAt; load both from one function" });
+        continue;
+      }
+    }
+    results.push(checked.check);
+  }
+  return results;
 }
 function checkNonTty(runs) {
   const offenders = runs.filter((run) => ANY_ESCAPE.test(run.stdout) || ANY_ESCAPE.test(run.stderr));
@@ -1127,10 +1476,10 @@ function checkPipe(run) {
 }
 function checkHelpCopy(texts, config) {
   const findings = texts.flatMap((item) => lintCliHelp(item.text, { kind: item.kind, location: item.location, ...config ? { config } : {} }));
-  const wording = findings.filter((finding) => finding.rule !== "cli-budget");
-  const errors = wording.filter((finding) => finding.severity === "error");
-  const warns = wording.filter((finding) => finding.severity !== "error");
-  const describe = (finding) => `${finding.rule} at ${finding.location}: ${finding.excerpt}`;
+  const wording = findings.filter((finding2) => finding2.rule !== "cli-budget");
+  const errors = wording.filter((finding2) => finding2.severity === "error");
+  const warns = wording.filter((finding2) => finding2.severity !== "error");
+  const describe = (finding2) => `${finding2.rule} at ${finding2.location}: ${finding2.excerpt}`;
   const problems = errors.slice(0, 3).map(describe);
   if (errors.length > 3)
     problems.push(`${errors.length - 3} more`);
@@ -1158,6 +1507,8 @@ function evaluate(runs, config) {
     ...runs.commands.map((item) => ({ kind: "command", location: `${item.command} --help`, text: item.flag.stdout }))
   ], config);
   results.push(copy.result);
+  if (runs.shared !== undefined)
+    results.push(...checkShared(runs.shared));
   return { results, findings: copy.findings };
 }
 
@@ -1233,6 +1584,15 @@ function goldenFiles(runs) {
   };
   for (const item of runs.commands)
     files[`${slug(item.command)}.help.txt`] = item.flag.stdout;
+  const shared = runs.shared;
+  if (shared?.status) {
+    files["commands.json"] = shared.commands.stdout;
+    files["status.json"] = shared.status.stdout;
+    if (shared.tui)
+      files["tui.json"] = shared.tui.stdout;
+    if (shared.doctor)
+      files["doctor.json"] = shared.doctor.stdout;
+  }
   return files;
 }
 
@@ -1435,7 +1795,20 @@ class GoldenRunner {
           await this.run({ args: [options.unknown], env: noColor, tty: true })
         ]
       } : {},
-      pipe: await this.run({ args: ["--help"], firstLineOnly: true })
+      pipe: await this.run({ args: ["--help"], firstLineOnly: true }),
+      shared: await this.collectShared()
+    };
+  }
+  async collectShared() {
+    const commands = await this.run({ args: ["commands", "--json"] });
+    const verbs = sharedVerbs(commands);
+    if (!verbs)
+      return { commands };
+    return {
+      commands,
+      status: await this.run({ args: ["status", "--json"] }),
+      ...verbs.has("tui") ? { tui: await this.run({ args: ["tui", "--json"] }) } : {},
+      ...verbs.has("doctor") ? { doctor: await this.run({ args: ["doctor", "--json"] }) } : {}
     };
   }
 }

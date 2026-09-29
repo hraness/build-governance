@@ -80,5 +80,13 @@ export function goldenFiles(runs: GoldenRuns): Record<string, string> {
     "unknown.agent.json": runs.unknownAgent.stdout,
   };
   for (const item of runs.commands) files[`${slug(item.command)}.help.txt`] = item.flag.stdout;
+  // The shared commands, named as ux-copy.yml's commands-json, status-json and tui-json inputs expect.
+  const shared = runs.shared;
+  if (shared?.status) {
+    files["commands.json"] = shared.commands.stdout;
+    files["status.json"] = shared.status.stdout;
+    if (shared.tui) files["tui.json"] = shared.tui.stdout;
+    if (shared.doctor) files["doctor.json"] = shared.doctor.stdout;
+  }
   return files;
 }
