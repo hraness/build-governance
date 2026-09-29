@@ -1334,16 +1334,21 @@ function checkJsonError(id, run, shared = { adopted: false }) {
   }
   const error = isRecord(doc.error) ? doc.error : undefined;
   if (shared.adopted || doc.schema === ERROR_SCHEMA) {
+    const strict = shared.adopted ? problems : warnings;
     if (doc.ok !== false)
       problems.push('missing "ok": false');
     else
-      problems.push(...envelopeProblems(doc, shared.product));
+      strict.push(...envelopeProblems(doc, shared.product));
     const code = typeof error?.code === "string" ? error.code : undefined;
+    if (!shared.adopted && (code === undefined || typeof error?.message !== "string"))
+      problems.push('missing "error": {"code", "message"}');
     if (code !== undefined && code !== "usage")
       warnings.push(`error.code is "${code}"; an unknown command is "usage"`);
     const want = code === undefined ? 2 : exitFor(code);
-    if (run.code !== want)
-      problems.push(`${exit(run)}, want exit ${want}${code !== undefined && code !== "usage" ? ` for "${code}"` : ""}`);
+    if (run.code !== want) {
+      const wrong = `${exit(run)}, want exit ${want}${code !== undefined && code !== "usage" ? ` for "${code}"` : ""}`;
+      (shared.adopted || run.code !== 2 ? problems : warnings).push(wrong);
+    }
     if (error && (!Array.isArray(error.next) || !error.next.length))
       warnings.push('no "error.next" command');
     warnings.push(...oneLine(run));
@@ -1373,13 +1378,15 @@ function sharedVerbs(run) {
       }
     }
   }
-  if (isRecord(doc) && (doc.schema === COMMANDS_SCHEMA || doc.schema === ERROR_SCHEMA)) {
-    const usage = doc.ok === false && isRecord(doc.error) && doc.error.code === "usage";
-    return { adopted: !usage, verbs };
-  }
+  if (run.timedOut || run.signal)
+    return { adopted: true, verbs };
+  if (isRecord(doc) && doc.ok === false && isRecord(doc.error) && doc.error.code === "usage")
+    return { adopted: false, verbs };
+  if (isRecord(doc) && (doc.schema === COMMANDS_SCHEMA || doc.schema === ERROR_SCHEMA))
+    return { adopted: true, verbs };
   if (isRecord(doc) && doc.ok === true && verbs.size)
     return { adopted: true, verbs };
-  return { adopted: !run.timedOut && !run.signal && run.code !== 2, verbs };
+  return { adopted: run.code !== 2, verbs };
 }
 function findingProblems(findings) {
   const problems = findings.slice(0, 3).map((item) => item.excerpt);
@@ -1415,14 +1422,14 @@ function envelopeRun(id, rule, run, product, extra = []) {
 function checkShared(shared) {
   const listed = shared ? sharedVerbs(shared.commands) : undefined;
   if (!shared || !listed?.adopted) {
-    const why = shared ? `\`commands --json\` is a usage error (${exit(shared.commands)})` : "not captured";
+    const why = shared ? `\`commands --json\` answered with a usage error (${exit(shared.commands)})` : "not captured";
     return [{ id: "shared commands", rule: "C1", status: "skip", detail: `${why}; these checks run once the CLI has the shared commands` }];
   }
   const commandsDoc = parseJson(shared.commands.stdout);
   const commands = isRecord(commandsDoc) ? checkCommands(commandsDoc, "commands --json") : undefined;
   const product = commands?.product;
   const commandProblems = commands ? findingProblems(commands.findings) : [notJson(shared.commands)];
-  if (shared.commands.code !== 0)
+  if (shared.commands.code !== 0 || shared.commands.timedOut || shared.commands.signal)
     commandProblems.unshift(`${exit(shared.commands)}, want exit 0`);
   const verbs = commands?.verbs ?? new Set;
   const results = [result("commands --json", "C1", commandProblems, oneLine(shared.commands), `${verbs.size} verbs${product ? ` for ${product}` : ""}, exit 0`)];

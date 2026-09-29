@@ -114,10 +114,10 @@ describe("--json error shapes", () => {
     expect(checkJsonError("--json error", run({ code: 2, stdout: `{"ok":false,"error":{"code":"usage","message":"m","next":""}}` })).status).toBe("warn");
   });
 
-  test("a malformed structured next fails", () => {
-    const bad = checkJsonError("--json error", run({ code: 2, stdout: sharedError([{ command: "demo --help", audience: "robot" }]) }));
-    expect(bad.status).toBe("fail");
-    expect(bad.detail).toContain("audience");
+  test("a malformed structured next fails once the CLI has the shared commands", () => {
+    const stdout = sharedError([{ command: "demo --help", audience: "robot" }]);
+    expect(checkJsonError("--json error", run({ code: 2, stdout }), { adopted: true }).status).toBe("fail");
+    expect(checkJsonError("--json error", run({ code: 2, stdout })).status).toBe("warn");
     // Outside the envelope it warns, as any non-string next did before.
     expect(checkJsonError("--json error", run({ code: 2, stdout: `${JSON.stringify({ ok: false, error: { code: "usage", message: "m", next: ["demo --help"] } })}` })).status).toBe("warn");
   });
@@ -133,10 +133,11 @@ describe("--json error shapes", () => {
 
   test("a code other than usage warns, and must exit with that code's status", () => {
     const notFound = envelope({ ok: false, schema: "hraness.error/1", error: { code: "not-found", message: "m", next } });
-    expect(checkJsonError("--json error", run({ code: 1, stdout: notFound })).status).toBe("warn");
-    expect(checkJsonError("--json error", run({ code: 2, stdout: notFound })).status).toBe("fail");
+    const adopted = { adopted: true, product: "demo" };
+    expect(checkJsonError("--json error", run({ code: 1, stdout: notFound }), adopted).status).toBe("warn");
+    expect(checkJsonError("--json error", run({ code: 2, stdout: notFound }), adopted).status).toBe("fail");
     const product = envelope({ ok: false, schema: "hraness.error/1", error: { code: "demo.unknown", message: "m", next } });
-    expect(checkJsonError("--json error", run({ code: 2, stdout: product })).status).toBe("fail");
+    expect(checkJsonError("--json error", run({ code: 2, stdout: product }), adopted).status).toBe("fail");
   });
 
   test("a CLI with the shared commands is held to the envelope even without schema", () => {
@@ -161,6 +162,21 @@ describe("shared commands", () => {
     expect(checkShared(undefined)[0]!.status).toBe("skip");
     expect(sharedVerbs(run({ code: 2, stdout: "" })).adopted).toBe(false);
     expect(sharedVerbs(run({ code: 1, stdout: sharedError([], { code: "usage" }) })).adopted).toBe(false);
+  });
+
+  test("a usage error in either shape skips; a hang does not", () => {
+    expect(sharedVerbs(run({ code: 1, stdout: `{"ok":false,"error":{"code":"usage","message":"m"}}` })).adopted).toBe(false);
+    const hung = run({ code: null, timedOut: true, stdout: "" });
+    expect(sharedVerbs(hung).adopted).toBe(true);
+    expect(byId(checkShared({ commands: hung }), "commands --json").status).toBe("fail");
+  });
+
+  test("without the shared commands, the error schema's envelope findings warn as in 0.5.0", () => {
+    const loose = `${JSON.stringify({ ok: false, schema: "hraness.error/1", generatedAt: "2026-09-29T00:00:00Z", error: { code: "usage", message: "m", next: "demo --help" } })}`;
+    expect(checkJsonError("--json error", run({ code: 2, stdout: loose })).status).toBe("warn");
+    expect(checkJsonError("--json error", run({ code: 2, stdout: loose }), { adopted: true }).status).toBe("fail");
+    const notFound = envelope({ ok: false, schema: "hraness.error/1", error: { code: "not-found", message: "m", next: [{ command: "demo status", why: "w", audience: "human" }] } });
+    expect(checkJsonError("--json error", run({ code: 3, stdout: notFound })).status).toBe("fail");
   });
 
   test("a broken commands --json fails instead of skipping", () => {

@@ -246,12 +246,19 @@ export function checkJsonError(id: string, run: CapturedRun, shared: SharedConte
   }
   const error = isRecord(doc.error) ? doc.error : undefined;
   if (shared.adopted || doc.schema === ERROR_SCHEMA) {
+    // A CLI without the shared commands that already prints the error schema passed 0.5.0 on ok, code,
+    // message and exit 2 alone; its envelope findings warn until it adopts the shared commands.
+    const strict = shared.adopted ? problems : warnings;
     if (doc.ok !== false) problems.push('missing "ok": false');
-    else problems.push(...envelopeProblems(doc, shared.product));
+    else strict.push(...envelopeProblems(doc, shared.product));
     const code = typeof error?.code === "string" ? error.code : undefined;
+    if (!shared.adopted && (code === undefined || typeof error?.message !== "string")) problems.push('missing "error": {"code", "message"}');
     if (code !== undefined && code !== "usage") warnings.push(`error.code is "${code}"; an unknown command is "usage"`);
     const want = code === undefined ? 2 : exitFor(code);
-    if (run.code !== want) problems.push(`${exit(run)}, want exit ${want}${code !== undefined && code !== "usage" ? ` for "${code}"` : ""}`);
+    if (run.code !== want) {
+      const wrong = `${exit(run)}, want exit ${want}${code !== undefined && code !== "usage" ? ` for "${code}"` : ""}`;
+      (shared.adopted || run.code !== 2 ? problems : warnings).push(wrong);
+    }
     if (error && (!Array.isArray(error.next) || !error.next.length)) warnings.push('no "error.next" command');
     warnings.push(...oneLine(run));
     return result(id, "D5", problems, warnings, `{"ok":false,…} on stdout in the shared envelope, ${exit(run)}`);
@@ -282,12 +289,12 @@ export function sharedVerbs(run: CapturedRun): { readonly adopted: boolean; read
       }
     }
   }
-  if (isRecord(doc) && (doc.schema === COMMANDS_SCHEMA || doc.schema === ERROR_SCHEMA)) {
-    const usage = doc.ok === false && isRecord(doc.error) && doc.error.code === "usage";
-    return { adopted: !usage, verbs };
-  }
+  // A run that hangs or is killed counts as adopted, so the checks fail instead of skipping.
+  if (run.timedOut || run.signal) return { adopted: true, verbs };
+  if (isRecord(doc) && doc.ok === false && isRecord(doc.error) && doc.error.code === "usage") return { adopted: false, verbs };
+  if (isRecord(doc) && (doc.schema === COMMANDS_SCHEMA || doc.schema === ERROR_SCHEMA)) return { adopted: true, verbs };
   if (isRecord(doc) && doc.ok === true && verbs.size) return { adopted: true, verbs };
-  return { adopted: !run.timedOut && !run.signal && run.code !== 2, verbs };
+  return { adopted: run.code !== 2, verbs };
 }
 
 function findingProblems(findings: readonly CopyFinding[]): string[] {
@@ -333,14 +340,14 @@ function envelopeRun(id: string, rule: string, run: CapturedRun, product: string
 export function checkShared(shared: SharedRuns | undefined): CheckResult[] {
   const listed = shared ? sharedVerbs(shared.commands) : undefined;
   if (!shared || !listed?.adopted) {
-    const why = shared ? `\`commands --json\` is a usage error (${exit(shared.commands)})` : "not captured";
+    const why = shared ? `\`commands --json\` answered with a usage error (${exit(shared.commands)})` : "not captured";
     return [{ id: "shared commands", rule: "C1", status: "skip", detail: `${why}; these checks run once the CLI has the shared commands` }];
   }
   const commandsDoc = parseJson(shared.commands.stdout);
   const commands = isRecord(commandsDoc) ? checkCommands(commandsDoc, "commands --json") : undefined;
   const product = commands?.product;
   const commandProblems = commands ? findingProblems(commands.findings) : [notJson(shared.commands)];
-  if (shared.commands.code !== 0) commandProblems.unshift(`${exit(shared.commands)}, want exit 0`);
+  if (shared.commands.code !== 0 || shared.commands.timedOut || shared.commands.signal) commandProblems.unshift(`${exit(shared.commands)}, want exit 0`);
   const verbs = commands?.verbs ?? new Set<string>();
   const results: CheckResult[] = [result("commands --json", "C1", commandProblems, oneLine(shared.commands), `${verbs.size} verbs${product ? ` for ${product}` : ""}, exit 0`)];
 
