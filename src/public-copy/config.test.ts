@@ -21,19 +21,27 @@ describe("parseCopyConfig", () => {
     expect(config.guides).toBe("required");
   });
 
-  test("accepts captured CLI help, menu fixtures, and proper nouns", () => {
+  test("accepts captured CLI help, control output, the tray guard, and proper nouns", () => {
     const config = parseCopyConfig({
       cli: [{ files: "test/golden/bare.txt", kind: "bare" }, { files: "test/golden/*.help.txt", kind: "command" }],
-      menus: { fixtures: ["test/menus/*.json"], companion: "node_modules/@hraness/desktop-foundation" },
+      control: { commands: "test/json/commands.json", status: "test/json/status.json", tui: "test/json/tui.json", envelopes: ["test/json/errors/*.json"] },
+      tray: { exclude: ["docs/history/**"] },
       properNouns: ["Mom"],
     });
     expect(config.cli?.map(entry => entry.kind)).toEqual(["bare", "command"]);
-    expect(config.menus?.companion).toBe("node_modules/@hraness/desktop-foundation");
+    expect(config.control).toEqual({ commands: "test/json/commands.json", status: "test/json/status.json", tui: "test/json/tui.json", envelopes: ["test/json/errors/*.json"] });
+    expect(config.tray).toEqual({ exclude: ["docs/history/**"] });
+    expect(parseCopyConfig({ tray: true }).tray).toBe(true);
+    expect(parseCopyConfig({ tray: false }).tray).toBe(false);
     expect(() => parseCopyConfig({ cli: [{ files: "a.txt", kind: "usage" }] })).toThrow("kind");
     expect(() => parseCopyConfig({ cli: [{ file: "a.txt", kind: "help" }] })).toThrow("Unknown cli[0] key");
     expect(() => parseCopyConfig({ cli: "a.txt" })).toThrow("cli must be an array");
-    expect(() => parseCopyConfig({ menus: { fixture: ["a.json"] } })).toThrow("Unknown menus key");
-    expect(() => parseCopyConfig({ menus: {} })).toThrow("menus.fixtures");
+    expect(() => parseCopyConfig({ menus: { fixtures: ["a.json"] } })).toThrow("menus section was removed");
+    expect(() => parseCopyConfig({ control: {} })).toThrow("control needs");
+    expect(() => parseCopyConfig({ control: { comands: "a.json" } })).toThrow("Unknown control key");
+    expect(() => parseCopyConfig({ control: { tui: "a.json" } })).toThrow("control.tui needs control.status");
+    expect(() => parseCopyConfig({ tray: "yes" })).toThrow("tray");
+    expect(() => parseCopyConfig({ tray: { include: [] } })).toThrow("Unknown tray key");
     expect(() => parseCopyConfig({ properNouns: "Mom" })).toThrow("properNouns");
   });
 

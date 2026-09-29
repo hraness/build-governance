@@ -1367,7 +1367,7 @@ function serializeBaseline(counts) {
 // src/public-copy/config.ts
 var DEFAULT_CONFIG_FILE = "public-copy.config.json";
 var DEFAULT_BASELINE_FILE = ".public-copy-baseline.json";
-var KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides", "cli", "menus", "properNouns"]);
+var KEYS = new Set(["$schema", "html", "markdown", "text", "json", "reference", "generated", "exclude", "vocabulary", "brand", "package", "baseline", "guides", "cli", "control", "tray", "properNouns"]);
 var CLI_KINDS = new Set(["bare", "help", "command"]);
 function object(value, label) {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -1394,6 +1394,8 @@ function file(value, label) {
 function parseCopyConfig(value) {
   const raw = object(value, "The config");
   for (const key of Object.keys(raw)) {
+    if (key === "menus")
+      throw new Error("The menus section was removed in build-governance 0.5.0 because menu bars were retired in desktop-foundation 1.0. Delete it, and check the command line with control and tray instead.");
     if (!KEYS.has(key))
       throw new Error(`Unknown config key \u201C${key}\u201D.`);
   }
@@ -1446,16 +1448,35 @@ function parseCopyConfig(value) {
       return { files: file(item.files, `cli[${index}].files`), kind: item.kind };
     });
   }
-  if (raw.menus !== undefined) {
-    const menus = object(raw.menus, "menus");
-    for (const key of Object.keys(menus)) {
-      if (key !== "fixtures" && key !== "companion")
-        throw new Error(`Unknown menus key \u201C${key}\u201D.`);
+  if (raw.control !== undefined) {
+    const control = object(raw.control, "control");
+    for (const key of Object.keys(control)) {
+      if (!["commands", "status", "tui", "envelopes"].includes(key))
+        throw new Error(`Unknown control key \u201C${key}\u201D.`);
     }
-    config.menus = {
-      fixtures: strings(menus.fixtures, "menus.fixtures"),
-      ...menus.companion === undefined ? {} : { companion: file(menus.companion, "menus.companion") }
+    if (control.tui !== undefined && control.status === undefined)
+      throw new Error("control.tui needs control.status to compare with.");
+    const parsed = {
+      ...control.commands === undefined ? {} : { commands: file(control.commands, "control.commands") },
+      ...control.status === undefined ? {} : { status: file(control.status, "control.status") },
+      ...control.tui === undefined ? {} : { tui: file(control.tui, "control.tui") },
+      ...control.envelopes === undefined ? {} : { envelopes: strings(control.envelopes, "control.envelopes") }
     };
+    if (!Object.keys(parsed).length)
+      throw new Error("control needs commands, status, tui, or envelopes.");
+    config.control = parsed;
+  }
+  if (raw.tray !== undefined) {
+    if (raw.tray === true || raw.tray === false)
+      config.tray = raw.tray;
+    else {
+      const tray = object(raw.tray, "tray");
+      for (const key of Object.keys(tray)) {
+        if (key !== "exclude")
+          throw new Error(`Unknown tray key \u201C${key}\u201D.`);
+      }
+      config.tray = tray.exclude === undefined ? {} : { exclude: strings(tray.exclude, "tray.exclude") };
+    }
   }
   if (raw.properNouns !== undefined)
     config.properNouns = strings(raw.properNouns, "properNouns");
@@ -1519,8 +1540,9 @@ function selectJsonPath(value, path) {
   return current;
 }
 // src/public-copy/files.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2, writeFileSync } from "fs";
-import { join as join2, relative, resolve as resolve2 } from "path";
+import { spawnSync } from "child_process";
+import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
+import { join, relative, resolve } from "path";
 
 // src/public-copy/cli-help.ts
 var CLI_HELP_KINDS = ["bare", "help", "command"];
@@ -1819,100 +1841,343 @@ function lintCliHelp(text, options) {
   return findings;
 }
 
-// src/public-copy/menus.ts
-import { existsSync, readFileSync } from "fs";
-import { dirname, join, resolve } from "path";
-var DESKTOP_FOUNDATION_PACKAGE = "@hraness/desktop-foundation";
-function menuFindings(report) {
+// src/public-copy/control.ts
+var CONTROL_CONTRACT_VERSION = "desktop-foundation/v1.0.0";
+var COMMANDS_SCHEMA = "hraness.commands/1";
+var ERROR_SCHEMA = "hraness.error/1";
+var OP_CLASSES = ["read", "operate", "decide", "decide-legacy"];
+var GATE_TIERS = ["T1T2", "T3"];
+var SHARED_ERROR_CODES = {
+  usage: 2,
+  "not-found": 1,
+  "permission-denied": 1,
+  "human-required": 3,
+  "gate-failed": 3,
+  "gate-expired": 3,
+  "owner-unavailable": 4,
+  "control-already-running": 5,
+  conflict: 5,
+  "digest-mismatch": 5,
+  "unsupported-platform": 1,
+  internal: 1
+};
+var PRODUCT_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+var VERB_SEGMENT = /^[a-z][a-z0-9-]{0,31}$/;
+var SCHEMA_ID = /^[a-z][a-z0-9-]{0,31}(\.[a-z0-9][a-z0-9-]{0,31})+\/[0-9]{1,9}$/;
+var ENVELOPE_CODE = /^([a-z][a-z0-9-]*|[a-z][a-z0-9-]{0,31}\.[a-z0-9][a-z0-9.-]{0,63})$/;
+var PRODUCT_CODE = /^[a-z][a-z0-9-]{0,31}\.[a-z0-9][a-z0-9.-]{0,63}$/;
+var TIMESTAMP = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/;
+var GRAMMAR = [
+  { path: "status", opClass: ["read"] },
+  { path: "tui", opClass: ["read"] },
+  { path: "doctor", opClass: ["read"] },
+  { path: "control status", opClass: ["read"] },
+  { path: "control stop", opClass: ["operate"] },
+  { path: "control install", opClass: ["decide"] },
+  { path: "control uninstall", opClass: ["decide"] },
+  { path: "approvals list", opClass: ["read"] },
+  { path: "approvals show", opClass: ["read"] },
+  { path: "approvals decide", opClass: ["decide"] },
+  { path: "permissions list", opClass: ["read"] },
+  { path: "permissions set", opClass: ["decide"] }
+];
+var RETIRED_VERBS = ["menubar", "menu-bar", "tray", "companion"];
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function extraKeys(value, allowed) {
+  return Object.keys(value).filter((key) => !allowed.includes(key));
+}
+function checkNext(value, where) {
+  if (!Array.isArray(value))
+    return [`${where} must be an array`];
+  const problems = [];
+  value.forEach((item, index) => {
+    const at = `${where}[${index}]`;
+    if (!isObject(item)) {
+      problems.push(`${at} must be an object`);
+      return;
+    }
+    for (const key of extraKeys(item, ["command", "why", "audience"]))
+      problems.push(`${at} has an unknown field "${key}"`);
+    if (typeof item.command !== "string" || !item.command)
+      problems.push(`${at}.command must be a non-empty string`);
+    if (typeof item.why !== "string" || !item.why)
+      problems.push(`${at}.why must be a non-empty string`);
+    if (item.audience !== "agent" && item.audience !== "human")
+      problems.push(`${at}.audience must be "agent" or "human"`);
+  });
+  return problems;
+}
+function envelopeProblems(value, product) {
+  if (!isObject(value))
+    return ["not a JSON object"];
+  const problems = [];
+  if (typeof value.generatedAt !== "string" || !TIMESTAMP.test(value.generatedAt)) {
+    problems.push('"generatedAt" must be a UTC timestamp with milliseconds, such as 2026-09-28T00:00:00.000Z');
+  }
+  if (value.ok === true) {
+    for (const key of extraKeys(value, ["ok", "schema", "generatedAt", "data", "next"]))
+      problems.push(`unknown field "${key}"`);
+    if (typeof value.schema !== "string" || !SCHEMA_ID.test(value.schema))
+      problems.push('"schema" must be an id such as example.status/1');
+    if (!("data" in value))
+      problems.push('missing "data"');
+    if ("next" in value)
+      problems.push(...checkNext(value.next, "next"));
+    return problems;
+  }
+  if (value.ok === false) {
+    for (const key of extraKeys(value, ["ok", "schema", "generatedAt", "error"]))
+      problems.push(`unknown field "${key}"`);
+    if (value.schema !== ERROR_SCHEMA)
+      problems.push(`"schema" must be "${ERROR_SCHEMA}" on an error`);
+    const error = value.error;
+    if (!isObject(error)) {
+      problems.push('missing "error" object');
+      return problems;
+    }
+    for (const key of extraKeys(error, ["code", "message", "detail", "next"]))
+      problems.push(`error has an unknown field "${key}"`);
+    if (typeof error.message !== "string" || !error.message)
+      problems.push("error.message must be a non-empty string");
+    if ("detail" in error && typeof error.detail !== "string")
+      problems.push("error.detail must be a string");
+    if ("next" in error)
+      problems.push(...checkNext(error.next, "error.next"));
+    const code = error.code;
+    if (typeof code !== "string" || !ENVELOPE_CODE.test(code)) {
+      problems.push("error.code must be a shared code or <product>.<code>");
+    } else if (!(code in SHARED_ERROR_CODES)) {
+      if (!PRODUCT_CODE.test(code))
+        problems.push(`error.code "${code}" is not a shared code; a product code needs its prefix, as in ${product ?? "example"}.${code}`);
+      else if (product && !code.startsWith(`${product}.`))
+        problems.push(`error.code "${code}" uses another product's prefix; use ${product}.`);
+    }
+    if (code === "human-required") {
+      const next = Array.isArray(error.next) ? error.next : [];
+      if (!next.some((item) => isObject(item) && item.audience === "human")) {
+        problems.push('a human-required error needs an error.next entry with "audience": "human"');
+      }
+    }
+    return problems;
+  }
+  problems.unshift('"ok" must be true or false');
+  return problems;
+}
+function finding(location, excerpt, hint) {
+  return { rule: "control", severity: "error", surface: "agent", location, excerpt, hint };
+}
+function checkEnvelope(value, location, product) {
+  const problems = envelopeProblems(value, product);
+  if (!problems.length)
+    return [];
+  return [finding(location, problems.join("; "), "Print every --json result through desktop-foundation's envelope (okEnvelope or runCli), which matches contract/envelope.schema.json.")];
+}
+function checkCommands(value, location) {
   const findings = [];
-  for (const result of report.results) {
-    if (!result.valid) {
-      findings.push({
-        rule: "menu",
-        severity: "error",
-        surface: "body",
-        location: result.file,
-        excerpt: `not a valid menu snapshot (${result.error ?? "unknown"})`,
-        hint: "Write the fixture as a protocol v2 snapshot, the JSON the menu sends, one file per state."
-      });
+  const verbs = new Set;
+  const fail = (excerpt, hint) => {
+    findings.push(finding(location, excerpt, hint));
+  };
+  const product = isObject(value) && isObject(value.data) && typeof value.data.product === "string" && PRODUCT_NAME.test(value.data.product) ? value.data.product : undefined;
+  findings.push(...checkEnvelope(value, location, product));
+  if (!isObject(value) || value.ok !== true) {
+    if (isObject(value) && value.ok === false)
+      fail("commands --json returned an error", "Capture the output of a working `<product> commands --json`.");
+    return { findings, verbs, ...product ? { product } : {} };
+  }
+  if (value.schema !== COMMANDS_SCHEMA)
+    fail(`schema ${JSON.stringify(value.schema)}`, `commands --json must use the schema ${COMMANDS_SCHEMA}.`);
+  const data = value.data;
+  if (!isObject(data)) {
+    fail("data is not an object", 'commands --json data is { "product", "verbs" }.');
+    return { findings, verbs };
+  }
+  for (const key of extraKeys(data, ["product", "verbs"]))
+    fail(`data.${key}`, 'commands --json data has only "product" and "verbs".');
+  if (!product)
+    fail(`product ${JSON.stringify(data.product)}`, "data.product must be the product name: lowercase letters, digits and hyphens.");
+  if (!Array.isArray(data.verbs) || !data.verbs.length) {
+    fail("no verbs", "data.verbs lists every verb the command line accepts.");
+    return { findings, verbs, ...product ? { product } : {} };
+  }
+  const classes = new Map;
+  data.verbs.forEach((verb, index) => {
+    const at = `verbs[${index}]`;
+    if (!isObject(verb)) {
+      fail(`${at} is not an object`, "Each verb is { path, opClass, schema, summary, gate?, operateWhen? }.");
+      return;
+    }
+    const path = verb.path;
+    const validPath = Array.isArray(path) && path.length > 0 && path.every((segment) => typeof segment === "string" && VERB_SEGMENT.test(segment));
+    const name = validPath ? path.join(" ") : at;
+    if (!validPath) {
+      fail(`${at}.path ${JSON.stringify(path)}`, 'A verb path is one or more lowercase words, such as ["approvals", "list"].');
+      return;
+    }
+    for (const key of extraKeys(verb, ["path", "opClass", "schema", "summary", "gate", "operateWhen"]))
+      fail(`${name}: ${key}`, "A verb descriptor has only path, opClass, schema, summary, gate and operateWhen.");
+    if (verbs.has(name))
+      fail(`${name} is listed twice`, "Register each verb path once.");
+    verbs.add(name);
+    const first = path[0] ?? "";
+    if (first === "commands")
+      fail(name, "`commands` is built in. Do not register it as a verb.");
+    if (RETIRED_VERBS.includes(first)) {
+      fail(name, "Menu bar and tray companions were retired in desktop-foundation 1.0. Offer `tui` and `status --json` instead.");
+    }
+    const opClass = verb.opClass;
+    if (typeof opClass !== "string" || !OP_CLASSES.includes(opClass)) {
+      fail(`${name}: opClass ${JSON.stringify(opClass)}`, `Every verb needs an op class: ${OP_CLASSES.join(", ")}.`);
+    } else {
+      classes.set(name, opClass);
+    }
+    if (typeof verb.schema !== "string" || !SCHEMA_ID.test(verb.schema))
+      fail(`${name}: schema ${JSON.stringify(verb.schema)}`, "A verb schema is an id such as example.status/1.");
+    if (typeof verb.summary !== "string" || !verb.summary.trim())
+      fail(`${name}: no summary`, "Give every verb a one-line summary.");
+    const gate = verb.gate;
+    if (gate !== undefined && (typeof gate !== "string" || !GATE_TIERS.includes(gate))) {
+      fail(`${name}: gate ${JSON.stringify(gate)}`, `A gate tier is ${GATE_TIERS.join(" or ")}.`);
+    }
+    if (opClass === "decide" && gate === undefined)
+      fail(`${name}: decide without a gate`, "A decide verb needs the human gate.");
+    if ((opClass === "read" || opClass === "operate") && gate !== undefined)
+      fail(`${name}: ${opClass} with a gate`, `A ${opClass} verb cannot have a gate.`);
+    if (verb.operateWhen !== undefined && (gate === undefined || typeof verb.operateWhen !== "string" || !verb.operateWhen.trim())) {
+      fail(`${name}: operateWhen`, "operateWhen is a summary string, and only a gated verb has one.");
+    }
+  });
+  for (const rule of GRAMMAR) {
+    const actual = classes.get(rule.path);
+    if (actual === undefined) {
+      if (rule.path === "status" && !verbs.has("status"))
+        fail("no status verb", "Every product answers `<product> status --json` with one-screen health.");
       continue;
     }
-    for (const finding of result.findings) {
-      findings.push({
-        rule: "menu",
-        severity: finding.severity === "error" ? "error" : "warn",
-        surface: "body",
-        location: `${result.file}#${finding.path}`,
-        excerpt: `${finding.rule}: ${finding.message}`,
-        hint: "See the menu rules in desktop-foundation docs/protocol-v2.md \xA7 Menu lint."
-      });
-    }
+    if (!rule.opClass.includes(actual))
+      fail(`${rule.path}: ${actual}`, `The shared verb \`${rule.path}\` is ${rule.opClass.join(" or ")}.`);
   }
+  return { findings, verbs, ...product ? { product } : {} };
+}
+function withoutGeneratedAt(value) {
+  if (!isObject(value))
+    return value;
+  const { generatedAt: _generatedAt, ...rest } = value;
+  return rest;
+}
+function canonical(value) {
+  if (Array.isArray(value))
+    return `[${value.map(canonical).join(",")}]`;
+  if (isObject(value))
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  return JSON.stringify(value) ?? "undefined";
+}
+function checkTuiMatchesStatus(tui, status, location, statusLocation) {
+  if (canonical(withoutGeneratedAt(tui)) === canonical(withoutGeneratedAt(status)))
+    return [];
+  return [finding(location, `differs from ${statusLocation}`, "`tui --json` prints the same envelope as `status --json` (only generatedAt may differ). Load both from one function.")];
+}
+
+// src/public-copy/tray.ts
+var TRAY_SOURCE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".rs",
+  ".swift",
+  ".m",
+  ".mm",
+  ".sh",
+  ".py",
+  ".plist",
+  ".toml",
+  ".yml",
+  ".yaml",
+  ".json"
+];
+var HINT = "Menu bars were retired in desktop-foundation 1.0. Give each former menu item a CLI verb with --json, and use `tui` to watch the product.";
+var SCRIPT = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+var TRAY_PATTERNS = [
+  { pattern: /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'`][^"'`\n]*\bmenu-kit(?:\.[cm]?[jt]sx?)?["'`]/, what: "an import of desktop-foundation's retired menu kit", extensions: SCRIPT },
+  { pattern: /\bserveCompanion\s*\(|\bimport\s*\{[^}]*\bserveCompanion\b/, what: "serveCompanion, the retired tray entry point" },
+  { pattern: /\bhraness-companion["'`,\s[\]]+(?:--state-dir|--check-protocol|--foreground|lint-menu)\b/, what: "a hraness-companion tray mode" },
+  { pattern: /\bcompanion["'`,\s[\]]+lint-menu\b/, what: "the retired companion lint-menu" },
+  { pattern: /\bTrayIconBuilder\b|\btray-icon\b|\bSystemTray\b|"trayIcon"\s*:/, what: "a Tauri tray icon", extensions: [".rs", ".toml", ".json", ...SCRIPT] },
+  { pattern: /\bNSStatusBar\b|\bNSStatusItem\b|\bMenuBarExtra\b/, what: "a macOS menu bar item", extensions: [".swift", ".m", ".mm", ".rs"] }
+];
+var TRAY_ALLOW_MARKER = "tray-guard: retiring";
+var TRAY_ALLOW = /tray-guard: retiring\b/;
+var COMMENT_LINE = /^\s*(?:\/\/|#|\/\*|\*|--|<!--)/;
+function trayPathFindings(file2, seen = new Set) {
+  const path = file2.replaceAll("\\", "/");
+  const segments = path.split("/");
+  const base = segments.at(-1) ?? "";
+  const index = segments.slice(0, -1).findIndex((segment) => /^(menubar|menu-bar|tray)$/i.test(segment));
+  if (index >= 0) {
+    const directory = `${segments.slice(0, index + 1).join("/")}/`;
+    if (seen.has(directory))
+      return [];
+    seen.add(directory);
+    return [{ rule: "tray", severity: "error", surface: "reference", location: directory, excerpt: `a menu bar directory: ${directory}`, hint: HINT }];
+  }
+  const source = TRAY_SOURCE_EXTENSIONS.some((extension) => base.toLowerCase().endsWith(extension) && extension !== ".json");
+  if (!source || !/^(menubar|menu-bar|tray)([-._]|$)/i.test(base))
+    return [];
+  return [{ rule: "tray", severity: "error", surface: "reference", location: path, excerpt: `a menu bar source file: ${path}`, hint: HINT }];
+}
+function trayTextFindings(text, file2) {
+  const lower = file2.toLowerCase();
+  const extension = TRAY_SOURCE_EXTENSIONS.find((item) => lower.endsWith(item));
+  if (!extension)
+    return [];
+  const findings = [];
+  const lines = text.split(/\r?\n/);
+  lines.forEach((line, index) => {
+    const above = lines[index - 1] ?? "";
+    if (TRAY_ALLOW.test(line) || TRAY_ALLOW.test(above) && COMMENT_LINE.test(above))
+      return;
+    for (const { pattern, what, extensions } of TRAY_PATTERNS) {
+      if (extensions && !extensions.includes(extension))
+        continue;
+      const match = pattern.exec(line);
+      if (!match)
+        continue;
+      findings.push({
+        rule: "tray",
+        severity: "error",
+        surface: "reference",
+        location: `${file2}:${index + 1}`,
+        excerpt: `${what}: ${line.trim().slice(0, 120)}`,
+        hint: HINT
+      });
+      break;
+    }
+  });
   return findings;
 }
-function packageRoot(entry) {
-  let dir = dirname(entry);
-  for (;; ) {
-    const manifest = join(dir, "package.json");
-    if (existsSync(manifest)) {
-      try {
-        if (JSON.parse(readFileSync(manifest, "utf8")).name === DESKTOP_FOUNDATION_PACKAGE)
-          return dir;
-      } catch {}
+function trayHelpFindings(text, file2) {
+  const findings = [];
+  text.split(/\r?\n/).forEach((line, index) => {
+    if (/^\s+(?:[a-z][a-z0-9-]*\s+)?(menubar|menu-bar|tray)\b(?:\s{2,}|$)/.test(line)) {
+      findings.push({ rule: "tray", severity: "error", surface: "reference", location: `${file2}:${index + 1}`, excerpt: line.trim(), hint: HINT });
     }
-    const parent = dirname(dir);
-    if (parent === dir)
-      return;
-    dir = parent;
-  }
-}
-function findCompanionCli(root, configured, override) {
-  const explicit = override ?? configured;
-  let pkg;
-  if (override !== undefined) {
-    pkg = resolve(override);
-  } else if (configured !== undefined) {
-    pkg = resolve(root, configured);
-  } else {
-    try {
-      pkg = packageRoot(Bun.resolveSync(DESKTOP_FOUNDATION_PACKAGE, root));
-    } catch {
-      pkg = undefined;
-    }
-  }
-  const cli = pkg ? join(pkg, "dist", "src", "cli.js") : undefined;
-  if (!cli || !existsSync(cli)) {
-    throw new Error(explicit ? `No desktop-foundation companion CLI at ${cli ?? explicit}. Point --menu-kit or menus.companion at an installed ${DESKTOP_FOUNDATION_PACKAGE} 0.8.0 or later.` : `menus needs ${DESKTOP_FOUNDATION_PACKAGE} 0.8.0 or later. Install it, or pass --menu-kit <package dir>.`);
-  }
-  return cli;
-}
-function lintMenuFixtures(root, files, options) {
-  if (!files.length)
-    return [];
-  const args = [process.execPath, options.companionCli, "lint-menu", "--strict", "--json"];
-  for (const noun of options.properNouns ?? [])
-    args.push("--proper-noun", noun);
-  const run = Bun.spawnSync([...args, ...files], { cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
-  const out = run.stdout.toString().trim();
-  let report;
-  try {
-    report = JSON.parse(out.split(`
-`).pop() ?? "");
-  } catch {
-    throw new Error(`companion lint-menu failed (exit ${run.exitCode}): ${(run.stderr.toString() || out).trim().split(`
-`)[0] ?? ""}`);
-  }
-  if (!Array.isArray(report.results))
-    throw new Error(`companion lint-menu printed an unexpected report (exit ${run.exitCode}).`);
-  return menuFindings(report);
+  });
+  return findings;
 }
 
 // src/public-copy/files.ts
 function checkGuides(repoRoot, options = {}) {
   const findings = [];
   for (const name of SYNCED_GUIDES) {
-    const path = join2(repoRoot, name);
-    if (!existsSync2(path)) {
+    const path = join(repoRoot, name);
+    if (!existsSync(path)) {
       if (options.required) {
         findings.push({
           rule: "guides",
@@ -1925,7 +2190,7 @@ function checkGuides(repoRoot, options = {}) {
       }
       continue;
     }
-    findings.push(...checkGuideText(name, readFileSync2(path, "utf8"), name));
+    findings.push(...checkGuideText(name, readFileSync(path, "utf8"), name));
   }
   return findings;
 }
@@ -1935,7 +2200,7 @@ function expand(root, patterns, exclude) {
   const files = new Set;
   for (const pattern of patterns) {
     if (!/[*?[{]/.test(pattern)) {
-      if (existsSync2(join2(root, pattern)))
+      if (existsSync(join(root, pattern)))
         files.add(pattern);
       continue;
     }
@@ -1948,9 +2213,33 @@ function expand(root, patterns, exclude) {
   return [...files].sort();
 }
 function read(root, file2) {
-  return readFileSync2(join2(root, file2), "utf8");
+  return readFileSync(join(root, file2), "utf8");
 }
-var COPY_SECTIONS = ["markdown", "html", "text", "json", "package", "guides", "cli", "menus"];
+var COPY_SECTIONS = ["markdown", "html", "text", "json", "package", "guides", "cli", "control", "tray"];
+var TRAY_ALWAYS_EXCLUDED = ["**/target/**", "**/.venv/**", "**/vendor/**"];
+function trackedFiles(root, exclude) {
+  const skip = [...ALWAYS_EXCLUDED, ...TRAY_ALWAYS_EXCLUDED, ...exclude].map((pattern) => new Bun.Glob(pattern));
+  const git = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."], { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  const listed = git.status === 0 ? git.stdout.split("\x00").filter(Boolean) : [...new Bun.Glob("**/*").scanSync({ cwd: root, onlyFiles: true, dot: true })];
+  return listed.map((file2) => file2.replaceAll("\\", "/")).filter((file2) => !skip.some((glob) => glob.match(file2)) && isFile(join(root, file2))).sort();
+}
+function isFile(path) {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+function readJson(root, file2, label) {
+  const path = join(root, file2);
+  if (!existsSync(path))
+    throw new Error(`${label} not found: ${file2}`);
+  try {
+    return JSON.parse(read(root, file2));
+  } catch (error) {
+    throw new Error(`${label} is not JSON: ${file2} (${error.message})`);
+  }
+}
 function runPublicCopy(root, config, options = {}) {
   const on = (section) => !options.only || options.only.has(section);
   const exclude = config.exclude ?? [];
@@ -2004,8 +2293,8 @@ function runPublicCopy(root, config, options = {}) {
   }
   const textFiles = [];
   for (const entry of on("text") ? config.text ?? [] : []) {
-    const path = join2(root, entry.file);
-    if (!existsSync2(path))
+    const path = join(root, entry.file);
+    if (!existsSync(path))
       throw new Error(`text file not found: ${entry.file}`);
     const text = read(root, entry.file);
     textFiles.push(entry.file);
@@ -2018,8 +2307,8 @@ function runPublicCopy(root, config, options = {}) {
   }
   const jsonFiles = [];
   for (const entry of on("json") ? config.json ?? [] : []) {
-    const path = join2(root, entry.file);
-    if (!existsSync2(path))
+    const path = join(root, entry.file);
+    if (!existsSync(path))
       throw new Error(`json file not found: ${entry.file}`);
     const parsed = JSON.parse(read(root, entry.file));
     jsonFiles.push(entry.file);
@@ -2039,14 +2328,61 @@ function runPublicCopy(root, config, options = {}) {
       findings.push(...lintCliHelp(read(root, file2), { kind: entry.kind, location: file2, config }));
     }
   }
-  const menuFiles = [];
-  if (on("menus") && config.menus) {
-    const matched = expand(root, config.menus.fixtures, exclude);
-    if (!matched.length)
-      throw new Error(`menu fixtures not found: ${config.menus.fixtures.join(", ")}`);
-    menuFiles.push(...matched);
-    const companionCli = findCompanionCli(root, config.menus.companion, options.menuKit);
-    findings.push(...lintMenuFixtures(root, matched, { companionCli, ...config.properNouns ? { properNouns: config.properNouns } : {} }));
+  if (on("tray") && config.tray) {
+    for (const file2 of cliFiles)
+      findings.push(...trayHelpFindings(read(root, file2), file2));
+  }
+  const controlFiles = [];
+  if (on("control") && config.control) {
+    const control = config.control;
+    let product;
+    if (control.commands) {
+      const commands = checkCommands(readJson(root, control.commands, "control.commands"), control.commands);
+      findings.push(...commands.findings);
+      product = commands.product;
+      controlFiles.push(control.commands);
+    }
+    let status;
+    if (control.status) {
+      status = readJson(root, control.status, "control.status");
+      findings.push(...checkEnvelope(status, control.status, product));
+      controlFiles.push(control.status);
+    }
+    if (control.tui && control.status) {
+      const tui = readJson(root, control.tui, "control.tui");
+      const envelope = checkEnvelope(tui, control.tui, product);
+      findings.push(...envelope);
+      if (!envelope.length)
+        findings.push(...checkTuiMatchesStatus(tui, status, control.tui, control.status));
+      controlFiles.push(control.tui);
+    }
+    if (control.envelopes) {
+      const matched = expand(root, control.envelopes, exclude);
+      if (!matched.length)
+        throw new Error(`control envelopes not found: ${control.envelopes.join(", ")}`);
+      for (const file2 of matched) {
+        if (controlFiles.includes(file2))
+          continue;
+        findings.push(...checkEnvelope(readJson(root, file2, "control envelope"), file2, product));
+        controlFiles.push(file2);
+      }
+    }
+  }
+  const trayFiles = [];
+  if (on("tray") && config.tray) {
+    const trayExclude = [...exclude, ...config.tray === true ? [] : config.tray.exclude ?? []];
+    const trayDirectories = new Set;
+    for (const file2 of trackedFiles(root, trayExclude)) {
+      const pathFindings = trayPathFindings(file2, trayDirectories);
+      findings.push(...pathFindings);
+      const text = readFileSync(join(root, file2));
+      if (text.length > 2 * 1024 * 1024 || text.includes(0))
+        continue;
+      const textFindings = trayTextFindings(text.toString("utf8"), file2);
+      findings.push(...textFindings);
+      if (pathFindings.length || textFindings.length)
+        trayFiles.push(file2);
+    }
   }
   if (on("package") && config.package) {
     const manifest = JSON.parse(read(root, config.package));
@@ -2059,7 +2395,7 @@ function runPublicCopy(root, config, options = {}) {
     const seen = new Set(raw.map((source) => source.location));
     const pages = [
       ...expand(root, [...config.markdown ?? [], ...config.reference ?? [], ...config.generated ?? [], ...config.html ?? []], exclude),
-      ...(config.text ?? []).map((entry) => entry.file).filter((entry) => existsSync2(join2(root, entry)))
+      ...(config.text ?? []).map((entry) => entry.file).filter((entry) => existsSync(join(root, entry)))
     ];
     for (const page of pages) {
       if (seen.has(page))
@@ -2090,7 +2426,7 @@ function runPublicCopy(root, config, options = {}) {
   }
   if (on("guides") && config.guides !== false)
     findings.push(...checkGuides(root, { required: config.guides === "required" }));
-  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles, ...cliFiles, ...menuFiles])].sort();
+  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles, ...cliFiles, ...controlFiles, ...trayFiles])].sort();
   return { findings: sortFindings(findings), files };
 }
 function sortFindings(findings) {
@@ -2099,19 +2435,19 @@ function sortFindings(findings) {
   return [...findings].sort((a, b) => fileOf(a.location).localeCompare(fileOf(b.location)) || lineOf2(a.location) - lineOf2(b.location) || a.location.localeCompare(b.location) || a.rule.localeCompare(b.rule) || a.excerpt.localeCompare(b.excerpt));
 }
 function loadCopyConfig(root, configPath = DEFAULT_CONFIG_FILE) {
-  const path = resolve2(root, configPath);
-  if (!existsSync2(path))
+  const path = resolve(root, configPath);
+  if (!existsSync(path))
     throw new Error(`No ${relative(root, path) || configPath} in ${root}.`);
-  return parseCopyConfig(JSON.parse(readFileSync2(path, "utf8")));
+  return parseCopyConfig(JSON.parse(readFileSync(path, "utf8")));
 }
 function baselinePath(root, config) {
-  return resolve2(root, config.baseline ?? DEFAULT_BASELINE_FILE);
+  return resolve(root, config.baseline ?? DEFAULT_BASELINE_FILE);
 }
 function readBaseline(root, config) {
   const path = baselinePath(root, config);
-  if (!existsSync2(path))
+  if (!existsSync(path))
     return;
-  return parseBaseline(JSON.parse(readFileSync2(path, "utf8"))).counts;
+  return parseBaseline(JSON.parse(readFileSync(path, "utf8"))).counts;
 }
 function writeBaseline(root, config, counts) {
   writeFileSync(baselinePath(root, config), serializeBaseline(counts));
@@ -2124,13 +2460,13 @@ function escapeData(value) {
 function escapeProperty(value) {
   return escapeData(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
 }
-function annotation(finding, advisory) {
-  const level = advisory || finding.severity !== "error" ? "warning" : "error";
-  const file2 = stripLocationSuffix(finding.location);
-  const line = /:(\d+)$/.exec(finding.location)?.[1];
-  const where = finding.location.includes("#") ? ` (${finding.location.slice(finding.location.indexOf("#") + 1)})` : "";
-  const props = [`file=${escapeProperty(file2)}`, ...line ? [`line=${line}`] : [], `title=${escapeProperty(`copy lint: ${finding.rule}`)}`];
-  return `::${level} ${props.join(",")}::${escapeData(`${finding.excerpt}${where} \xB7 ${finding.hint}`)}`;
+function annotation(finding2, advisory) {
+  const level = advisory || finding2.severity !== "error" ? "warning" : "error";
+  const file2 = stripLocationSuffix(finding2.location);
+  const line = /:(\d+)$/.exec(finding2.location)?.[1];
+  const where = finding2.location.includes("#") ? ` (${finding2.location.slice(finding2.location.indexOf("#") + 1)})` : "";
+  const props = [`file=${escapeProperty(file2)}`, ...line ? [`line=${line}`] : [], `title=${escapeProperty(`copy lint: ${finding2.rule}`)}`];
+  return `::${level} ${props.join(",")}::${escapeData(`${finding2.excerpt}${where} \xB7 ${finding2.hint}`)}`;
 }
 // src/public-copy/expect.ts
 class CopyAssertionError extends Error {
@@ -2197,6 +2533,9 @@ ${findings.map((f) => `  ${f.excerpt} (${f.hint})`).join(`
 }
 export {
   writeBaseline,
+  trayTextFindings,
+  trayPathFindings,
+  trayHelpFindings,
   tableCells,
   serializeBaseline,
   sentenceCaseBreak,
@@ -2207,10 +2546,8 @@ export {
   parseCopyConfig,
   parseBaseline,
   normalizeCounts,
-  menuFindings,
   lowerBaseline,
   loadCopyConfig,
-  lintMenuFixtures,
   lintMarkdown,
   lintCopy,
   lintCliHelp,
@@ -2218,7 +2555,6 @@ export {
   helpLines,
   guideCanonicalHash,
   findInstallPins,
-  findCompanionCli,
   fileOfLocation,
   extractMarkdown,
   extractHtml,
@@ -2226,27 +2562,42 @@ export {
   expectNoInternalVocabulary,
   expectInstallPinsMatch,
   expectCountAgreement,
+  envelopeProblems,
   definedTerms,
   decodeEntities,
   countFindings,
   compareVersions,
   compareBaseline,
+  checkTuiMatchesStatus,
   checkInstallPins,
   checkGuides,
   checkGuideText,
+  checkEnvelope,
+  checkCommands,
   annotation,
+  TRAY_SOURCE_EXTENSIONS,
+  TRAY_PATTERNS,
+  TRAY_ALWAYS_EXCLUDED,
+  TRAY_ALLOW_MARKER,
   SYNCED_GUIDES,
+  SHARED_ERROR_CODES,
   SELF_CERTIFICATION,
+  RETIRED_VERBS,
   RETIRED_NAMES,
   PUBLIC_COPY_RULES_VERSION,
   PRECISION_WORDS,
+  OP_CLASSES,
   INTERNAL_VOCABULARY,
-  DESKTOP_FOUNDATION_PACKAGE,
+  GRAMMAR,
+  GATE_TIERS,
+  ERROR_SCHEMA,
   DEFAULT_CONFIG_FILE,
   DEFAULT_BASELINE_FILE,
   CopyAssertionError,
   COPY_SURFACES,
   COPY_SECTIONS,
+  CONTROL_CONTRACT_VERSION,
+  COMMANDS_SCHEMA,
   CLI_PROPER_NOUNS,
   CLI_JARGON,
   CLI_HELP_KINDS,

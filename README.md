@@ -7,7 +7,7 @@ Each repository keeps its own settings: an architecture policy map, any product-
 ## Install
 
 ```sh
-bun add -d github:hraness/build-governance#v0.3.0
+bun add -d github:hraness/build-governance#v0.5.0
 ```
 
 The package needs Bun 1.3.14 or later. The architecture checker also needs TypeScript 6 in the consuming repository.
@@ -59,7 +59,7 @@ Warnings are printed but never fail the run and never enter the baseline.
 | 1 | An error count rose, or there is no baseline and the run found errors |
 | 2 | The options, the config file, or the baseline file are invalid, or a file the config names is missing or invalid |
 
-Other options: `--root <dir>`, `--config <file>`, `--json` for machine-readable output, `--quiet` to print only errors, `--only <sections>` to check some sections of the config (such as `--only cli,menus`), `--advisory` to report findings without failing, `--annotations` to print GitHub Actions annotations, and `--menu-kit <dir>` to name the installed `@hraness/desktop-foundation` package the menu checks use.
+Other options: `--root <dir>`, `--config <file>`, `--json` for machine-readable output, `--quiet` to print only errors, `--only <sections>` to check some sections of the config (such as `--only cli,control,tray`), `--advisory` to report findings without failing, and `--annotations` to print GitHub Actions annotations.
 
 ### Configuration
 
@@ -80,8 +80,9 @@ Every field is optional, and an unknown field is an error.
 | `exclude` | Globs to skip. `node_modules` and `.git` are always skipped. |
 | `guides` | `true` (default) checks the synced guides when they exist, `"required"` also fails when they are missing, and `false` skips the check. |
 | `cli` | Captured CLI output: `[{ "files": "test/golden/bare.txt", "kind": "bare" }]`. `kind` is `bare` (the command run with no arguments), `help` (root `--help`), or `command` (one command's `--help`). `files` is a file or a glob. |
-| `menus` | Menu snapshot fixtures: `{ "fixtures": ["test/menus/*.json"] }`, one v2 snapshot per state. `companion` optionally names the `@hraness/desktop-foundation` package directory; by default the lint uses the one the repository installs. |
-| `properNouns` | Names that CLI help and menus may capitalize mid-sentence, such as `Mom` in a fixture. |
+| `control` | Captured `--json` output: `commands` (the output of `<product> commands --json`), `status` (`status --json`), `tui` (`tui --json`, which needs `status`), and `envelopes` (globs of other captured output, such as errors). |
+| `tray` | `true` fails on menu bar or tray code anywhere in the repository. `{ "exclude": ["docs/history/**"] }` does the same and skips those globs. |
+| `properNouns` | Names that CLI help may capitalize mid-sentence, such as `Mom` in a fixture. |
 
 ### Rules
 
@@ -100,13 +101,14 @@ Every field is optional, and an unknown field is an error.
 | `cli-budget` | A bare invocation over 25 lines or 80 columns, root help over 60 lines, or help lines over 100 columns | Error for the bare invocation and root help line count; warning for help columns and long command help |
 | `cli-case` | A capitalized word in the middle of a help heading or command summary, such as `Getting Started` or `Turn On replies`. Names in `properNouns`, the brand, macOS and app names, key names, mixed-case names, capitals, commands, flags, quotes, and placeholders pass. | Error |
 | `cli-jargon` | Internal words in help text (`admission`, `qualification`, `custody`, `receipt`, `lane`, `gate`, `surface`, `projection`, `habitat`, `organism`, and `vocabulary.add`) unless the same line explains them, as in `lane (the queue a chat waits in)` | Error; warning for `pin` and the other internal words |
-| `menu` | A finding from desktop-foundation's `companion lint-menu --strict`: more than 10 top-level rows, a missing or second primary action, Quit not last, title case, paths, IDs or commands in labels, and the other menu rules. An invalid snapshot is also an error. | Error |
+| `control` | Captured `--json` output that breaks desktop-foundation's envelope schema, an unknown error code or another product's prefix, a `human-required` error with no step for a person, a `commands --json` verb with no op class, a `read` or `operate` verb that asks for a person or a `decide` verb that does not, a shared verb (`status`, `tui`, `doctor`, `control`, `approvals`, `permissions`) with the wrong op class, no `status` verb, and `tui --json` that differs from `status --json` in anything but `generatedAt` | Error |
+| `tray` | Menu bar code: a `menubar`, `menu-bar` or `tray` directory or source file, an import of desktop-foundation's `menu-kit`, `serveCompanion`, a `hraness-companion` tray mode (`--state-dir`, `--check-protocol`, `--foreground`), `companion lint-menu`, Tauri and macOS tray APIs, and a `menubar` or `tray` command in captured help | Error |
 
 The word lists ship with the package, so a new entry reaches every repository on its next version bump.
 
-### Lint CLI help and menus
+### Lint CLI help and control output
 
-Products with a command line or a menu bar add their captured output and menu fixtures to the same config. The rules come from the CLI and menu bar style guide (`CLI_MENU_STYLE.md` in hraness/.github).
+Products with a command line add their captured help and `--json` output to the same config. The help rules come from the CLI style guide (`CLI_MENU_STYLE.md` in hraness/.github). The control checks follow desktop-foundation 1.0: its envelope schema, error codes, op classes and name limits, which this package carries as data, so no desktop-foundation install is needed.
 
 ```json
 {
@@ -115,12 +117,20 @@ Products with a command line or a menu bar add their captured output and menu fi
     { "files": "test/golden/help.txt", "kind": "help" },
     { "files": "test/golden/*.help.txt", "kind": "command" }
   ],
-  "menus": { "fixtures": ["test/menus/*.json"] },
+  "control": {
+    "commands": "test/golden/commands.json",
+    "status": "test/golden/status.json",
+    "tui": "test/golden/tui.json",
+    "envelopes": ["test/golden/errors/*.json"]
+  },
+  "tray": true,
   "properNouns": ["Mom"]
 }
 ```
 
-The menu checks run desktop-foundation's own `companion lint-menu --strict`, so a product is checked by the same rules its menu ships with. They need `@hraness/desktop-foundation` 0.8.0 or later installed, or `--menu-kit <dir>`.
+Menu bars were retired in desktop-foundation 1.0, so `tray` fails when one comes back. It reads the files Git tracks, or every file outside a Git repository, and skips `node_modules`, `.git`, `target`, `.venv`, `vendor`, and `exclude`. Code that retires an old menu bar, such as a check for a leftover login item, marks the line with a `tray-guard: retiring` comment, on the same line or alone on the line above.
+
+The `menus` section and `--menu-kit` were removed in 0.5.0. A config that still has `menus` fails with a message that says what replaced it.
 
 ### Use it from code and tests
 
@@ -196,7 +206,7 @@ Two reusable workflows run these checks in a product's CI without adding a depen
 ```yaml
 jobs:
   cli-golden:
-    uses: hraness/build-governance/.github/workflows/cli-golden.yml@v0.3.0
+    uses: hraness/build-governance/.github/workflows/cli-golden.yml@v0.5.0
     with:
       build: bun install --frozen-lockfile
       cli: bun src/cli.ts
@@ -204,17 +214,19 @@ jobs:
       commands: setup,status,chats add
 
   ux-copy:
-    uses: hraness/build-governance/.github/workflows/ux-copy.yml@v0.3.0
+    uses: hraness/build-governance/.github/workflows/ux-copy.yml@v0.5.0
     with:
-      menu-fixtures: test/menus/*.json
       bare-golden: test/golden/bare.txt
       help-golden: test/golden/help.txt
       command-goldens: test/golden/*.help.txt
+      commands-json: test/golden/commands.json
+      status-json: test/golden/status.json
+      tui-json: test/golden/tui.json
       proper-nouns: Mom
 ```
 
 - `cli-golden.yml` builds the CLI (`build`, with `setup: node` or `setup: rust` for those toolchains and `runs-on` for macOS tools), runs `hraness-cli-golden`, and keeps the captured output as a `cli-goldens-<name>-<OS>` artifact.
-- `ux-copy.yml` runs `hraness-copy-lint --only cli,menus` over the captured help and the menu fixtures, with desktop-foundation's menu lint from the release named by `desktop-foundation` (default `v0.8.0`, checked against `desktop-foundation-sha256`). A repository that already has `cli` and `menus` in its `public-copy.config.json` passes `config: public-copy.config.json` instead.
+- `ux-copy.yml` runs `hraness-copy-lint --only cli,control,tray` over the captured help, the captured `--json` output (`commands-json`, `status-json`, `tui-json`, and `envelopes`), and the repository's files for menu bar code. The tray guard is on unless you pass `tray: "false"`; `tray-exclude` lists globs it skips. A repository that already has `cli`, `control` and `tray` in its `public-copy.config.json` passes `config: public-copy.config.json` instead. `menu-fixtures` was removed in 0.5.0 and fails when set.
 
 To make a check required, once its findings are fixed:
 

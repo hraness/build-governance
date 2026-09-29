@@ -83,10 +83,14 @@ jobs:
   copy-follows-contract:
     uses: ./.github/workflows/ux-copy.yml
     with:
-      menu-fixtures: fixtures/ux/menus/*.json
-      bare-golden: fixtures/ux/help/bare.txt
-      help-golden: fixtures/ux/help/help.txt
-      command-goldens: fixtures/ux/help/*.help.txt
+      working-directory: fixtures/ux
+      bare-golden: help/bare.txt
+      help-golden: help/help.txt
+      command-goldens: help/*.help.txt
+      commands-json: control/commands.json
+      status-json: control/status.json
+      tui-json: control/tui.json
+      envelopes: control/errors/*.json
       proper-nouns: Demo
       mode: required
       use-checkout: true

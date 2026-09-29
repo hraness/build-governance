@@ -2,7 +2,8 @@
  * File-system adapter for the public-copy lint: reads the files a config names and runs the pure checks.
  * The rules themselves live in modules without I/O.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseBaseline, serializeBaseline } from "./baseline.js";
 import type { CopyCounts } from "./baseline.js";
@@ -13,7 +14,8 @@ import { extractHtml } from "./html.js";
 import { selectJsonPath } from "./json-path.js";
 import { lintMarkdown } from "./markdown.js";
 import type { MarkdownKind } from "./markdown.js";
-import { findCompanionCli, lintMenuFixtures } from "./menus.js";
+import { checkCommands, checkEnvelope, checkTuiMatchesStatus } from "./control.js";
+import { trayHelpFindings, trayPathFindings, trayTextFindings } from "./tray.js";
 import { checkInstallPins } from "./pins.js";
 import type { TextSource } from "./pins.js";
 import { excerptAt, lintCopy } from "./rules.js";
@@ -70,15 +72,44 @@ export interface PublicCopyResult {
 }
 
 /** The config sections `--only` can select. `markdown` also covers `reference` and `generated`. */
-export type CopySection = "markdown" | "html" | "text" | "json" | "package" | "guides" | "cli" | "menus";
+export type CopySection = "markdown" | "html" | "text" | "json" | "package" | "guides" | "cli" | "control" | "tray";
 
-export const COPY_SECTIONS: readonly CopySection[] = ["markdown", "html", "text", "json", "package", "guides", "cli", "menus"];
+export const COPY_SECTIONS: readonly CopySection[] = ["markdown", "html", "text", "json", "package", "guides", "cli", "control", "tray"];
 
 export interface RunPublicCopyOptions {
   /** Run only these sections. Default: every section the config names. */
   readonly only?: ReadonlySet<CopySection>;
-  /** An installed `@hraness/desktop-foundation` package directory for the menu checks. Wins over `menus.companion`. */
-  readonly menuKit?: string;
+}
+
+/** Paths the tray guard never reads: dependencies, build output of other tools, and VCS data. */
+export const TRAY_ALWAYS_EXCLUDED = ["**/target/**", "**/.venv/**", "**/vendor/**"];
+
+/** Tracked files under `root` (from git when it is a repository, else every file), minus the exclusions. */
+function trackedFiles(root: string, exclude: readonly string[]): string[] {
+  const skip = [...ALWAYS_EXCLUDED, ...TRAY_ALWAYS_EXCLUDED, ...exclude].map(pattern => new Bun.Glob(pattern));
+  const git = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."], { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  const listed = git.status === 0
+    ? git.stdout.split("\0").filter(Boolean)
+    : [...new Bun.Glob("**/*").scanSync({ cwd: root, onlyFiles: true, dot: true })];
+  return listed.map(file => file.replaceAll("\\", "/")).filter(file => !skip.some(glob => glob.match(file)) && isFile(join(root, file))).sort();
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function readJson(root: string, file: string, label: string): unknown {
+  const path = join(root, file);
+  if (!existsSync(path)) throw new Error(`${label} not found: ${file}`);
+  try {
+    return JSON.parse(read(root, file));
+  } catch (error) {
+    throw new Error(`${label} is not JSON: ${file} (${(error as Error).message})`);
+  }
 }
 
 /** Run every configured check over the files under `root`. */
@@ -160,13 +191,57 @@ export function runPublicCopy(root: string, config: CopyConfig, options: RunPubl
     }
   }
 
-  const menuFiles: string[] = [];
-  if (on("menus") && config.menus) {
-    const matched = expand(root, config.menus.fixtures, exclude);
-    if (!matched.length) throw new Error(`menu fixtures not found: ${config.menus.fixtures.join(", ")}`);
-    menuFiles.push(...matched);
-    const companionCli = findCompanionCli(root, config.menus.companion, options.menuKit);
-    findings.push(...lintMenuFixtures(root, matched, { companionCli, ...(config.properNouns ? { properNouns: config.properNouns } : {}) }));
+  if (on("tray") && config.tray) {
+    for (const file of cliFiles) findings.push(...trayHelpFindings(read(root, file), file));
+  }
+
+  const controlFiles: string[] = [];
+  if (on("control") && config.control) {
+    const control = config.control;
+    let product: string | undefined;
+    if (control.commands) {
+      const commands = checkCommands(readJson(root, control.commands, "control.commands"), control.commands);
+      findings.push(...commands.findings);
+      product = commands.product;
+      controlFiles.push(control.commands);
+    }
+    let status: unknown;
+    if (control.status) {
+      status = readJson(root, control.status, "control.status");
+      findings.push(...checkEnvelope(status, control.status, product));
+      controlFiles.push(control.status);
+    }
+    if (control.tui && control.status) {
+      const tui = readJson(root, control.tui, "control.tui");
+      const envelope = checkEnvelope(tui, control.tui, product);
+      findings.push(...envelope);
+      if (!envelope.length) findings.push(...checkTuiMatchesStatus(tui, status, control.tui, control.status));
+      controlFiles.push(control.tui);
+    }
+    if (control.envelopes) {
+      const matched = expand(root, control.envelopes, exclude);
+      if (!matched.length) throw new Error(`control envelopes not found: ${control.envelopes.join(", ")}`);
+      for (const file of matched) {
+        if (controlFiles.includes(file)) continue;
+        findings.push(...checkEnvelope(readJson(root, file, "control envelope"), file, product));
+        controlFiles.push(file);
+      }
+    }
+  }
+
+  const trayFiles: string[] = [];
+  if (on("tray") && config.tray) {
+    const trayExclude = [...exclude, ...(config.tray === true ? [] : config.tray.exclude ?? [])];
+    const trayDirectories = new Set<string>();
+    for (const file of trackedFiles(root, trayExclude)) {
+      const pathFindings = trayPathFindings(file, trayDirectories);
+      findings.push(...pathFindings);
+      const text = readFileSync(join(root, file));
+      if (text.length > 2 * 1024 * 1024 || text.includes(0)) continue;
+      const textFindings = trayTextFindings(text.toString("utf8"), file);
+      findings.push(...textFindings);
+      if (pathFindings.length || textFindings.length) trayFiles.push(file);
+    }
   }
 
   if (on("package") && config.package) {
@@ -207,7 +282,7 @@ export function runPublicCopy(root: string, config: CopyConfig, options: RunPubl
 
   if (on("guides") && config.guides !== false) findings.push(...checkGuides(root, { required: config.guides === "required" }));
 
-  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles, ...cliFiles, ...menuFiles])].sort();
+  const files = [...new Set([...kinds.keys(), ...htmlFiles, ...textFiles, ...jsonFiles, ...cliFiles, ...controlFiles, ...trayFiles])].sort();
   return { findings: sortFindings(findings), files };
 }
 

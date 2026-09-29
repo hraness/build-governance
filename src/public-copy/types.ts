@@ -27,7 +27,8 @@ export type CopyRule =
   | "cli-budget"
   | "cli-case"
   | "cli-jargon"
-  | "menu";
+  | "control"
+  | "tray";
 
 export type CopySeverity = "error" | "warn";
 
@@ -62,12 +63,25 @@ export interface CopyCliEntry {
   readonly kind: "bare" | "help" | "command";
 }
 
-/** Menu snapshot fixtures checked with desktop-foundation's `companion lint-menu --strict`. */
-export interface CopyMenusConfig {
-  /** Files or globs of snapshot fixtures (v2 JSON, one per menu state). */
-  readonly fixtures: readonly string[];
-  /** Path to an installed `@hraness/desktop-foundation` package. Defaults to the one the repository resolves. */
-  readonly companion?: string;
+/**
+ * Captured `--json` output checked against desktop-foundation's control grammar and envelope
+ * (`contract/envelope.schema.json`). Each field is a file relative to the root.
+ */
+export interface CopyControlConfig {
+  /** Captured `<product> commands --json`. */
+  readonly commands?: string;
+  /** Captured `<product> status --json`. */
+  readonly status?: string;
+  /** Captured `<product> tui --json`, which must equal `status` except `generatedAt`. Needs `status`. */
+  readonly tui?: string;
+  /** Files or globs of other captured envelopes, such as error output. */
+  readonly envelopes?: readonly string[];
+}
+
+/** The guard against menu bar and tray companions. `true` scans every tracked file with the default exclusions. */
+export interface CopyTrayConfig {
+  /** Globs the guard skips, on top of `exclude`. */
+  readonly exclude?: readonly string[];
 }
 
 export interface CopyJsonEntry {
@@ -97,9 +111,11 @@ export interface CopyConfig {
   };
   /** Captured `--help` and bare-invocation output. */
   readonly cli?: readonly CopyCliEntry[];
-  /** Menu snapshot fixtures. */
-  readonly menus?: CopyMenusConfig;
-  /** Names that CLI help and menus may capitalize mid-sentence, such as contact or service names. */
+  /** Captured `--json` output for the control grammar and envelope checks. */
+  readonly control?: CopyControlConfig;
+  /** Fail on menu bar or tray code, such as a menu-kit import or a `menubar.ts` file. */
+  readonly tray?: boolean | CopyTrayConfig;
+  /** Names that CLI help may capitalize mid-sentence, such as contact or service names. */
   readonly properNouns?: readonly string[];
   /** The product name as the registry spells it. A `<title>` names it once. */
   readonly brand?: string;

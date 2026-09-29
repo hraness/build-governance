@@ -80,6 +80,64 @@ describe("runPublicCopy", () => {
   });
 });
 
+describe("runPublicCopy control and tray", () => {
+  const controlDir = join(repoRoot, "fixtures", "ux", "control");
+  const golden = (file: string): string => readFileSync(join(controlDir, file), "utf8");
+  const tray = {
+    "src/cli.ts": 'import { renderMenu } from "@hraness/desktop-foundation/menu-kit";\n',
+    "src/menubar.ts": "export const x = 1;\n",
+    "src/retire.ts": '// tray-guard: retiring the 0.x login item\nconst legacy = ["hraness-companion", "--state-dir"];\n',
+    "docs/history.md": "We used serveCompanion once.\n",
+    "old/menubar/main.rs": "fn main() {}\n",
+    "app/menubar/main.rs": "fn main() {}\n",
+    "app/menubar/icon.png": "png",
+    "node_modules/dep/menu-kit.js": 'import "./menu-kit.js";\n',
+    "help.txt": "Usage: example <command>\n\nCommands\n  status     See what Example is doing\n  menubar    Show Example in the menu bar\n",
+  };
+
+  test("checks captured control output against the contract", () => {
+    const root = fixture("control", {
+      "commands.json": golden("commands.json"),
+      "status.json": golden("status.json"),
+      "tui.json": JSON.stringify({ ...JSON.parse(golden("status.json")), data: { owner: "stopped" } }),
+      "errors/ok.json": golden("errors/product-code.json"),
+      "errors/bad.json": JSON.stringify({ ok: false, schema: "hraness.error/1", generatedAt: "2026-09-28T00:00:00.000Z", error: { code: "other.x", message: "x" } }),
+    });
+    const result = runPublicCopy(root, { control: { commands: "commands.json", status: "status.json", tui: "tui.json", envelopes: ["errors/*.json"] } });
+    expect(result.findings.map(f => `${f.rule} ${f.location}`)).toEqual(["control errors/bad.json", "control tui.json"]);
+    expect(result.files).toEqual(["commands.json", "errors/bad.json", "errors/ok.json", "status.json", "tui.json"]);
+    expect(() => runPublicCopy(root, { control: { commands: "missing.json" } })).toThrow("control.commands not found");
+    expect(() => runPublicCopy(root, { control: { envelopes: ["none/*.json"] } })).toThrow("control envelopes not found");
+  });
+
+  test("finds menu bar code outside a Git repository", () => {
+    const root = fixture("tray-plain", tray);
+    const result = runPublicCopy(root, { tray: { exclude: ["old/**"] }, cli: [{ files: "help.txt", kind: "help" }], guides: false });
+    expect(result.findings.filter(f => f.rule === "tray").map(f => f.location)).toEqual(["app/menubar/", "help.txt:5", "src/cli.ts:1", "src/menubar.ts"]);
+    expect(runPublicCopy(root, { tray: false }).findings).toEqual([]);
+  });
+
+  test("reads only the files Git tracks or would track", () => {
+    const root = fixture("tray-git", { ...tray, ".gitignore": "old/\napp/\n" });
+    const git = (...args: string[]): void => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    };
+    git("init", "-q");
+    const result = runPublicCopy(root, { tray: true, guides: false });
+    expect(result.findings.map(f => f.location)).toEqual(["src/cli.ts:1", "src/menubar.ts"]);
+    expect(result.files).toEqual(["src/cli.ts", "src/menubar.ts"]);
+  });
+
+  test("the CLI rejects the removed menu options", () => {
+    expect(run(scratch, "--menu-kit", "x").out).toContain("--menu-kit was removed");
+    const root = fixture("menus-config", { "public-copy.config.json": JSON.stringify({ menus: { fixtures: ["a.json"] } }) });
+    const { code, out } = run(root);
+    expect(code).toBe(2);
+    expect(out).toContain("menus section was removed");
+  });
+});
+
 describe("checkGuides", () => {
   test("passes this repository's synced guides", () => {
     expect(checkGuides(repoRoot, { required: true })).toEqual([]);

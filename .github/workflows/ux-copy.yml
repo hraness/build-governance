@@ -1,7 +1,7 @@
-# Reusable: lint captured CLI help and menu snapshot fixtures with hraness-copy-lint.
-# Menu fixtures are checked by desktop-foundation's own `companion lint-menu --strict`.
+# Reusable: lint captured CLI help, check captured --json output against desktop-foundation's control
+# grammar and envelope, and fail on menu bar or tray code, with hraness-copy-lint.
 # Advisory by default: findings become warnings on the pull request and never fail the caller.
-name: CLI and menu copy
+name: CLI copy and control
 
 on:
   workflow_call:
@@ -10,10 +10,6 @@ on:
         description: "advisory (warn, never fail) or required (fail on findings)"
         type: string
         default: advisory
-      menu-fixtures:
-        description: "Globs of v2 menu snapshot fixtures, one per line"
-        type: string
-        default: ""
       bare-golden:
         description: "Captured output of the CLI run with no arguments (25-line budget)"
         type: string
@@ -26,25 +22,45 @@ on:
         description: "Globs of captured <command> --help output, one per line"
         type: string
         default: ""
+      commands-json:
+        description: "Captured <product> commands --json, checked against the shared verb grammar"
+        type: string
+        default: ""
+      status-json:
+        description: "Captured <product> status --json, checked against the envelope schema"
+        type: string
+        default: ""
+      tui-json:
+        description: "Captured <product> tui --json, which must match status-json except generatedAt"
+        type: string
+        default: ""
+      envelopes:
+        description: "Globs of other captured --json output, such as errors, one per line"
+        type: string
+        default: ""
+      tray:
+        description: "Fail on menu bar or tray code, such as a menu-kit import (true or false)"
+        type: string
+        default: "true"
+      tray-exclude:
+        description: "Globs the tray guard skips, one per line, such as code that retires an old login item"
+        type: string
+        default: ""
       proper-nouns:
-        description: "Names help and menus may capitalize, comma-separated"
+        description: "Names help may capitalize, comma-separated"
         type: string
         default: ""
       config:
-        description: "A public-copy.config.json with cli and menus sections, used instead of the inputs above"
+        description: "A public-copy.config.json with cli, control and tray sections, used instead of the inputs above"
         type: string
         default: ""
       working-directory:
         type: string
         default: "."
-      desktop-foundation:
-        description: "desktop-foundation release tag whose lint-menu checks the fixtures"
+      menu-fixtures:
+        description: "Removed in 0.5.0 with the menu checks. Fails when set."
         type: string
-        default: v0.8.0
-      desktop-foundation-sha256:
-        description: "SHA-256 of that release's SDK tarball. Change it with the tag."
-        type: string
-        default: 0f6378ef34f42d56df818cfba285547fd71a6f9de556156bb42110013e6ca191
+        default: ""
       use-checkout:
         description: "Use the checked-out repository as build-governance. Only for build-governance's own CI."
         type: boolean
@@ -52,14 +68,14 @@ on:
       governance-ref:
         description: "build-governance tag or branch that provides the lint"
         type: string
-        default: v0.3.0
+        default: v0.5.0
 
 permissions:
   contents: read
 
 jobs:
   copy:
-    name: CLI and menu copy (${{ inputs.mode }})
+    name: CLI copy and control (${{ inputs.mode }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     continue-on-error: ${{ inputs.mode == 'advisory' }}
@@ -88,24 +104,16 @@ jobs:
           fi
           git clone --quiet --depth 1 --branch "$REF" https://github.com/hraness/build-governance.git "$RUNNER_TEMP/build-governance"
           echo "GOVERNANCE=$RUNNER_TEMP/build-governance" >> "$GITHUB_ENV"
-      - name: Get desktop-foundation's menu lint
-        if: inputs.menu-fixtures != '' || inputs.config != ''
-        env:
-          TAG: ${{ inputs.desktop-foundation }}
-          SHA256: ${{ inputs.desktop-foundation-sha256 }}
-        run: |
-          set -euo pipefail
-          version="${TAG#v}"
-          dir="$RUNNER_TEMP/desktop-foundation"
-          mkdir -p "$dir"
-          curl -fsSL --retry 3 -o "$dir/sdk.tgz" "https://github.com/hraness/desktop-foundation/releases/download/$TAG/hraness-desktop-foundation-$version.tgz"
-          echo "$SHA256  $dir/sdk.tgz" | sha256sum --check --status || { echo "::error::The desktop-foundation $TAG tarball does not match desktop-foundation-sha256. Update both inputs together."; exit 2; }
-          tar -xzf "$dir/sdk.tgz" -C "$dir"
-          echo "MENU_KIT=$dir/package" >> "$GITHUB_ENV"
       - name: Write the lint config
         if: inputs.config == ''
         env:
           MENU_FIXTURES: ${{ inputs.menu-fixtures }}
+          COMMANDS_JSON: ${{ inputs.commands-json }}
+          STATUS_JSON: ${{ inputs.status-json }}
+          TUI_JSON: ${{ inputs.tui-json }}
+          ENVELOPES: ${{ inputs.envelopes }}
+          TRAY: ${{ inputs.tray }}
+          TRAY_EXCLUDE: ${{ inputs.tray-exclude }}
           BARE_GOLDEN: ${{ inputs.bare-golden }}
           HELP_GOLDEN: ${{ inputs.help-golden }}
           COMMAND_GOLDENS: ${{ inputs.command-goldens }}
@@ -126,13 +134,12 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           set -uo pipefail
-          args=(--root . --config "$COPY_CONFIG" --only "cli,menus" --annotations)
-          if [[ -n "${MENU_KIT:-}" ]]; then args+=(--menu-kit "$MENU_KIT"); fi
+          args=(--root . --config "$COPY_CONFIG" --only "cli,control,tray" --annotations)
           if [[ "$MODE" == advisory ]]; then args+=(--advisory); fi
           bun "$GOVERNANCE/src/public-copy-cli.ts" "${args[@]}" | tee "$RUNNER_TEMP/copy.log"
           status=${PIPESTATUS[0]}
           {
-            echo "### CLI and menu copy ($MODE)"
+            echo "### CLI copy and control ($MODE)"
             echo
             grep -E '^hraness-public-copy/' "$RUNNER_TEMP/copy.log" || true
             if [[ "$MODE" == advisory ]]; then echo; echo "Advisory: findings show as warnings and do not fail the job."; fi
