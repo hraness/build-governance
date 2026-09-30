@@ -7,7 +7,7 @@ Each repository keeps its own settings: an architecture policy map, any product-
 ## Install
 
 ```sh
-bun add -d github:hraness/build-governance#v0.5.1
+bun add -d github:hraness/build-governance#v0.5.2
 ```
 
 The package needs Bun 1.3.14 or later. The architecture checker also needs TypeScript 6 in the consuming repository.
@@ -209,7 +209,7 @@ Two reusable workflows run these checks in a product's CI without adding a depen
 ```yaml
 jobs:
   cli-golden:
-    uses: hraness/build-governance/.github/workflows/cli-golden.yml@v0.5.1
+    uses: hraness/build-governance/.github/workflows/cli-golden.yml@v0.5.2
     with:
       build: bun install --frozen-lockfile
       cli: bun src/cli.ts
@@ -217,7 +217,7 @@ jobs:
       commands: setup,status,chats add
 
   ux-copy:
-    uses: hraness/build-governance/.github/workflows/ux-copy.yml@v0.5.1
+    uses: hraness/build-governance/.github/workflows/ux-copy.yml@v0.5.2
     with:
       bare-golden: test/golden/bare.txt
       help-golden: test/golden/help.txt
