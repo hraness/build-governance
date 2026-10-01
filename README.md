@@ -169,7 +169,7 @@ expectNoInternalVocabulary(heroHeading, "heading");
 
 ## Check CLI output
 
-`hraness-cli-golden` runs a built command-line tool the ways the CLI and menu bar style guide (`CLI_MENU_STYLE.md` in hraness/.github) names, then checks line budgets, exit codes, errors, color, and pipes. Each run gets a temporary `HOME`, so it never reads or changes your real settings.
+`hraness-cli-golden` runs a built command-line tool the ways the CLI and menu bar style guide (`CLI_MENU_STYLE.md` in hraness/.github) names, then checks line budgets, exit codes, errors, color, and pipes. Each run gets temporary `HOME` and XDG directories for settings and state. These environment defaults do not restrict access to other files or services.
 
 ```sh
 hraness-cli-golden --cli "bun src/cli.ts" --name textbutler --commands "setup,status,chats add"
