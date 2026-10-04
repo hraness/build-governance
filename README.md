@@ -47,6 +47,24 @@ error  emdash    README.md:7
         Rewrite the sentence without an em dash. Do not substitute a spaced hyphen.
 ```
 
+### Verify your first run
+
+Run the check again without `--update-baseline`:
+
+```sh
+bun run check:copy
+```
+
+Read the summary's file count as well as the exit status. Confirm it includes
+the files you intend to publish; build your site first if the config scans
+built HTML. Exit 0 means no error count exceeds the recorded baseline, not
+that every file has no findings. Commit the config and baseline with your
+project so local checks and CI compare against the same counts.
+
+For an error, fix the named text and rerun the check. For exit 2, correct the
+options, config, missing file, or invalid baseline before interpreting any copy
+results. Do not remove the baseline to record a new error as pre-existing.
+
 ### How the baseline works
 
 The first `--update-baseline` run writes `.public-copy-baseline.json` with the number of errors per file and rule. After that, `hraness-copy-lint` exits with status 1 when any of those counts rises, including errors in a file or rule the baseline does not list. Later `--update-baseline` runs only lower counts to match what you fixed; they never raise one, so a new error cannot be recorded away. Without a baseline file, any error fails the run.
